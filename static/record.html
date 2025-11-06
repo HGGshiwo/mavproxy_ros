@@ -1,0 +1,10 @@
+<html>
+  <head>
+    <title>Directory Listing</title>
+  </head>
+  <body>
+    {% for item in items %}
+    <li><a href="{{ item.link_path }}">{{ item.name }}</a></li>
+    {% endfor %}
+  </body>
+</html>

@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="mavproxy_ros" type="connection.py" name="connection" output="screen"/>
+    <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True"/>
+</launch>
