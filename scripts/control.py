@@ -39,9 +39,9 @@ class ROSWpControl:
         rospy.Subscriber("/planning/pos_cmd", PositionCommand, self.cmd_cb)
         rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_cb)
     
-    def gps_cb(self, gps: NavSatFix):
-        self.lat = gps.latitude
-        self.lon = gps.longitude
+    def gps_cb(self, data: NavSatFix):
+        self.lat = data.latitude
+        self.lon = data.longitude
         
     def gps2local(self, lat, lng, gps):
         # WGS84地理坐标系
@@ -209,23 +209,22 @@ class Control(Node):
         self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         
-        rospy.Subscriber("/mavros/global_position/rel_alt", Float64, self.rel_alt_cb)
-        rospy.Subscriber("/mavros/sys_status", SysStatus, self.systatus_cb)
-        rospy.Subscriber("/mavros/statustext/recv", StatusText, self.state_cb)
-        
         self.wp_ctrl = ROSWpControl()
         self.rel_alt = 0
         self.sys_status = None
         self.state = None
 
+    @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
-        
+    
+    @Node.ros("/mavros/sys_status", SysStatus)
     def systatus_cb(self, data):
         self.sys_status = data
     
+    @Node.ros("/mavros/statustext/recv", StatusText)
     def state_cb(self, data):
-        self.state = data
+        self.state = data.text
         
     @Node.route("/set_waypoint", "POST")
     def set_waypoint(self, data):
@@ -306,7 +305,7 @@ class Control(Node):
             return SUCCESS_RESPONSE({"arm": True})
         for i in range(1000):
             time.sleep(0.01)
-            if self.state is not None and self.state.startswith("Prearm: "):
+            if self.state is not None and self.state.startswith("PreArm: "):
                 return SUCCESS_RESPONSE({"arm": False, "reason": self.state})
         return SUCCESS_RESPONSE({"arm": False, "reason": "wait for reason timeout"})
     

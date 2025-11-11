@@ -1,4 +1,8 @@
 <launch>
     <node pkg="mavproxy_ros" type="connection.py" name="connection" output="screen"/>
-    <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True"/>
+    <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True" />
+    <node pkg="mavproxy_ros" type="pland.py" name="pland" output="screen" clear_params="true">
+        <rosparam command="load" file="$(find mavproxy_ros)/config/pland.yml"/>
+        <remap  from="/pland_camera/image_raw" to="/roscam/cam/image_raw"/>
+    </node>
 </launch>
