@@ -7,7 +7,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 import rospy
 from rsos_msgs.srv import StartBagRecord
-from std_msgs.srv import Trigger
+from std_srvs.srv import Trigger
+import rospkg
+import os
 
 def parse_param(param):
     if param.integer != 0:
@@ -23,7 +25,11 @@ class ParamNode(Node):
         rospy.wait_for_service('/mavros/param/get')
         rospy.wait_for_service('/mavros/param/set')
         
-        pdef_path = str(Path(__file__).parent.parent.joinpath("config", "apm.pdef.xml"))
+        # pdef_path = str(Path(__file__).parent.parent.joinpath("config", "apm.pdef.xml").resolve())
+        # rospy.loginfo(f"load pdef from: {Path(__file__).parent.resolve()}, {Path(__file__).parent.parent.resolve()}")
+        r = rospkg.RosPack()
+        path = r.get_path('mavproxy_ros')
+        pdef_path = os.path.join(path, "config", "apm.pdef.xml")
         self.pdef = self.load_pdef(pdef_path)
         
     def load_pdef(self, path):  
@@ -52,7 +58,7 @@ class ParamNode(Node):
         res = srv(prefix=data["bag_name"])
         if not res.success:
             return ERROR_RESPONSE(res.message)
-        return SUCCESS_RESPONSE()
+        return SUCCESS_RESPONSE(res.message)
     
     @Node.route("/stop_record", "POST")
     def stop_record(self, data=None):
