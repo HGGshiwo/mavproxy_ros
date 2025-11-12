@@ -4,6 +4,7 @@ import rospy
 from std_msgs.msg import String, UInt32, Float64
 from mavros_msgs.msg import State
 from mavproxy_ros.srv import ProcessRequest, ProcessRequestResponse
+from mavproxy_ros.srv import Register, RegisterResponse
 import uvicorn
 import asyncio
 import json
@@ -17,7 +18,8 @@ from uvicorn.config import Config
 from utils import SUCCESS_RESPONSE
 from mavros_msgs.srv import StreamRate, StreamRateRequest
 from mavros_msgs.msg import StatusText
-
+from std_msgs.msg import Empty
+import time
 
 loop = None
 def run_in_loop(task):
@@ -156,6 +158,23 @@ async def run_server():
     await server.serve()
 
 
+def register_cb(data):
+    path = data.path
+    method = data.method
+    topic = data.topic
+    handler = RequestHandler(path, method, topic)
+    
+    # 动态添加路由
+    app.add_api_route(
+        path,
+        handler.__call__,
+        methods=[method],
+    )
+    app.openapi_schema = None
+    app.setup()
+    res = SUCCESS_RESPONSE()
+    return RegisterResponse(response=json.dumps(res))
+
 if __name__ == "__main__":
     # 启动 ROS 节点
     rospy.init_node('connection')
@@ -163,13 +182,20 @@ if __name__ == "__main__":
     rospy.Subscriber("/mavros/global_position/raw/satellites", UInt32, gps_cb)
     rospy.Subscriber("/mavros/global_position/rel_alt", Float64, alt_cb)
     rospy.Subscriber("/mavros/statustext/recv", StatusText, state_cb)
+    rospy.loginfo('wait for mavros service')
     rospy.wait_for_service('/mavros/set_stream_rate')
-
     set_rate = rospy.ServiceProxy('/mavros/set_stream_rate', StreamRate)
+    rospy.loginfo("done")
+    
+    rospy.Service("/mavproxy/register", Register, register_cb)
+    start_pub = rospy.Publisher("/mavproxy/do_register", Empty, queue_size=10)
+    
     req = StreamRateRequest()
     req.stream_id = 0
     req.message_rate = 10
     req.on_off = True
     resp = set_rate(req)
-
+    time.sleep(1)
+    start_pub.publish(Empty())
+    rospy.loginfo("publish")
     asyncio.run(run_server())

@@ -26,7 +26,6 @@ class Pland(Node):
         )
         self.detect_res_pub = rospy.Publisher('/pland_camera/result', Image, queue_size=10)
         self.bridge = CvBridge()
-        self.set_config()
         self.fps_helper = FPSHelper(fps=1)
 
     def create_detector(self):

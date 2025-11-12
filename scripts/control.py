@@ -199,11 +199,11 @@ class ROSWpControl:
 class Control(Node):
     def __init__(self):
         super().__init__()
-        rospy.loginfo("wait for mavros service")
+        rospy.loginfo("wait for mavros service...")
         rospy.wait_for_service('/mavros/cmd/arming')
         rospy.wait_for_service('/mavros/set_mode')
-
         rospy.wait_for_service('/mavros/cmd/takeoff')
+        rospy.loginfo("done")
         self.takeoff_srv = rospy.ServiceProxy('/mavros/cmd/takeoff', CommandTOL)
         self.arm_service = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
         self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
@@ -311,7 +311,6 @@ class Control(Node):
     
 if __name__ == '__main__':
     control_node = Control()
-    rospy.loginfo("control node start success")
     control_node.run()
     
     

@@ -1,7 +1,7 @@
 param:
   PLND_ENABLED: 1
   PLND_TYPE: 1
-  PLND_OPTIONS: 0
+  PLND_OPTIONS: 1
   # 只在仿真中使用
   SIM_SONAR_SCALE: 10
   RNGFND1_TYPE: 1
@@ -9,7 +9,6 @@ param:
   RNGFND1_PIN: 0
   RNGFND1_MAX: 50
   RNGFND1_MIN: 0
-  RNGFND_LANDING: 1
 
 # rc:
 #   6: 1500

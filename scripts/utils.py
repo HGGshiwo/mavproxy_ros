@@ -4,8 +4,10 @@ import threading
 import rospy
 import requests
 from mavproxy_ros.srv import ProcessRequest, ProcessRequestResponse
+from mavproxy_ros.srv import Register
 from mavros_msgs.srv import ParamSet
 from mavros_msgs.msg import ParamValue, OverrideRCIn
+from std_msgs.msg import Empty
 import json
 import time
 
@@ -20,8 +22,12 @@ class Node:
         self.loop = None
         self.name = self.__class__.__name__.lower()
         rospy.init_node(self.name)
+        rospy.wait_for_service('/mavros/param/set')
+        rospy.wait_for_service('/mavproxy/register')
         self.param_set_service = rospy.ServiceProxy('/mavros/param/set', ParamSet)
+        self.register_service = rospy.ServiceProxy('/mavproxy/register', Register)
         self.rc_override_pub = rospy.Publisher('/mavros/rc/override', OverrideRCIn, queue_size=10)
+        rospy.Subscriber('/mavproxy/do_register', Empty, self.register_route)
         self.set_config()
     
     def get_param(self, name):
@@ -107,14 +113,14 @@ class Node:
         return wrapper
     
     def register(self):
-        self.register_route()
+        self.register_route() # 出现了do_register后再注册
         self.register_ros()
         
     def register_ros(self):
         for topic, topic_type, func in self.ros_list:
             rospy.Subscriber(topic, topic_type, partial(func, self), queue_size=1)
         
-    def register_route(self):
+    def register_route(self, data=None):
         for path, method, func in self.route_list:
             if path.startswith("/"):
                 topic = "/" + path[1:].replace("/", "_")
@@ -133,12 +139,18 @@ class Node:
                         "msg": str(e), 
                         "detail": traceback.format_exc()
                     }))
-            rospy.Service(topic, ProcessRequest, _cb)
-
-            requests.post(
-                "http://localhost:8000/register", 
-                json={"path": path, "method": method, "topic": path}
-            )
+            try:
+                rospy.Service(topic, ProcessRequest, _cb)
+            except rospy.service.ServiceException:
+                pass # 可能重复被调用
+            res = self.register_service(path=path, method=method, topic=path)
+            response = json.loads(res.response)
+            if not response["status"] == "success":
+                raise ValueError("register service died")
+            # requests.post(
+            #     "http://localhost:8000/register", 
+            #     json={"path": path, "method": method, "topic": path}
+            # )
             print(f"register: HTTP: {path}, {method} -> ROS: {topic} {func.__name__}")    
     
     def __init_subclass__(cls):

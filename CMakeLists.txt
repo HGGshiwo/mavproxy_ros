@@ -56,6 +56,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_service_files(
   FILES
   ProcessRequest.srv
+  Register.srv
 #   Service2.srv
 )
 
