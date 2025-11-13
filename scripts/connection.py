@@ -15,7 +15,8 @@ from fastapi import WebSocket, WebSocketDisconnect, Depends
 import threading
 from pathlib import Path
 from uvicorn.config import Config
-from utils import SUCCESS_RESPONSE
+from base.utils import SUCCESS_RESPONSE
+from base.camera import VideoBuilder
 from mavros_msgs.srv import StreamRate, StreamRateRequest
 from mavros_msgs.msg import StatusText
 from std_msgs.msg import Empty
@@ -91,6 +92,21 @@ async def index():
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+@app.get("/video/{path}")
+async def video_feed(path: str):
+    builder = VideoBuilder.create("http", path)
+    return builder.build()
+
+@app.get("/video/{path:path}")
+async def video_feed(path: str):
+    builder = VideoBuilder.create("http", path)
+    return builder.build()
+
+@app.post("/offer/{path:path}")
+async def webrtc(path: str, arg: dict):
+    builder = VideoBuilder.create("webrtc", path)
+    return await builder.build(**arg)
+
 @app.post("/register")
 async def register_route(request: Request):
     data = await request.json()
@@ -150,6 +166,10 @@ def state_cb(data):
         return
     ws_manager.publish({"error": data.text}, "error")
 
+def ws_cb(data):
+    global ws_manager
+    ws_manager.publish(json.loads(data.data), "event")
+
 async def run_server():
     config = Config(app, host="0.0.0.0", port=8000)
     server = uvicorn.Server(config)
@@ -182,6 +202,7 @@ if __name__ == "__main__":
     rospy.Subscriber("/mavros/global_position/raw/satellites", UInt32, gps_cb)
     rospy.Subscriber("/mavros/global_position/rel_alt", Float64, alt_cb)
     rospy.Subscriber("/mavros/statustext/recv", StatusText, state_cb)
+    rospy.Subscriber("/mavros/ws", String, ws_cb)
     rospy.loginfo('wait for mavros service')
     rospy.wait_for_service('/mavros/set_stream_rate')
     set_rate = rospy.ServiceProxy('/mavros/set_stream_rate', StreamRate)

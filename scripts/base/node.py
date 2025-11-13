@@ -2,7 +2,6 @@ import asyncio
 from functools import partial
 import threading
 import rospy
-import requests
 from mavproxy_ros.srv import ProcessRequest, ProcessRequestResponse
 from mavproxy_ros.srv import Register
 from mavros_msgs.srv import ParamSet
@@ -181,37 +180,3 @@ class Node:
         t.start()
         rospy.loginfo(f"{self.__class__.__name__.lower()} start")
         rospy.spin()
-        
-        
-class FPSHelper:
-    def __init__(self, fps=-1, ps_cb=None):
-        self.target_fps = fps
-        self.start = time.time()
-        self.cnt_start = time.time()
-        self.frame_cnt = 0
-        self.fps = 0
-        self.ps_cb = ps_cb
-
-    def step(self, block=True):
-        now = time.time()
-        if now - self.cnt_start > 1:
-            self.fps = self.frame_cnt / (now - self.cnt_start)
-            self.frame_cnt = 0
-            self.cnt_start = time.time()
-            if self.ps_cb is not None:
-                self.ps_cb(self.fps)
-        
-        self.frame_cnt += 1
-        if block:
-            if self.target_fps > 0 and now - self.start < 1 / self.target_fps:
-                time.sleep(1 / self.target_fps - now + self.start)
-            self.start = time.time()
-            # self.frame_cnt += 1
-        else:
-            if self.target_fps > 0 and now - self.start < 1 / self.target_fps:
-                trigger = False
-            else:
-                trigger = True
-                self.start = time.time()
-                # self.frame_cnt += 1
-            return trigger

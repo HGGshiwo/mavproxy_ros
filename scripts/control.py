@@ -8,14 +8,15 @@ from std_msgs.msg import Empty
 from geometry_msgs.msg import PoseStamped, Vector3, Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, String
 
 import json
 import threading
 from pyproj import CRS, Transformer
 import copy
 import numpy as np
-from utils import SUCCESS_RESPONSE, Node
+from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE
+from base.node import Node
 import time
 
 class ROSWpControl:
@@ -33,11 +34,14 @@ class ROSWpControl:
         
         self.wp_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=1)
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
+        self.ws_pub = rospy.Publisher("/mavros/ws", String, queue_size=1)
+        
         rospy.Subscriber("/mavros/global_position/raw/fix", NavSatFix, self.gps_cb)
         rospy.Subscriber("/mavros/local_position/odom", Odometry, self.odom_cb)
         rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
         rospy.Subscriber("/planning/pos_cmd", PositionCommand, self.cmd_cb)
         rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_cb)
+        
     
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
@@ -98,6 +102,11 @@ class ROSWpControl:
     def wp_done_cb(self, data=None):
         if self.waypoint is None:
             return
+        self.ws_pub.publish(json.dumps({
+            "event": "progress",
+            "cur": self.wp_idx + 1,
+            "total": len(self.waypoint),
+        }))
         if self.wp_idx >= len(self.waypoint):
             if self.land:
                 self.set_mode_service(0, "LAND")
@@ -257,7 +266,12 @@ class Control(Node):
         self.set_mode_service(0, 'GUIDED')
         
         # 解锁
-        self.arm_service(True)
+        out = self.prearm()["msg"]
+        if out["arm"] == False:
+            return ERROR_RESPONSE(out["reason"])
+        res = self.arm_service(True)
+        if res.result == 1:
+            return ERROR_RESPONSE("can not arm")
         rospy.loginfo("Vehicle armed")
         
         # 持续发布目标点

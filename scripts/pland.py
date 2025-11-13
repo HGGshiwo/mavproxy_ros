@@ -1,7 +1,8 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-from utils import Node, FPSHelper
+from base.utils import FPSHelper
+from base.node import Node
 import numpy as np
 from pupil_apriltags import Detector
 import cv2
