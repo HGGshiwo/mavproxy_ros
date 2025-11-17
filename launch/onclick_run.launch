@@ -5,4 +5,5 @@
         <rosparam command="load" file="$(find mavproxy_ros)/config/pland.yml"/>
         <remap  from="/pland_camera/image_raw" to="/roscam/cam/image_raw"/>
     </node>
+    <node pkg="mavproxy_ros" type="param.py" name="param" output="screen"  />
 </launch>

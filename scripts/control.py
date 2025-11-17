@@ -32,12 +32,13 @@ class ROSWpControl:
         self.takeoff_alt = None
         self.odom_lock = threading.Lock()
         
-        self.wp_pub = rospy.Publisher("/move_base_simple/goal", PoseStamped, queue_size=1)
+        self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=1)
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
         self.ws_pub = rospy.Publisher("/mavros/ws", String, queue_size=1)
         
         rospy.Subscriber("/mavros/global_position/raw/fix", NavSatFix, self.gps_cb)
         rospy.Subscriber("/mavros/local_position/odom", Odometry, self.odom_cb)
+        rospy.Subscriber("/mavros/local_position/rel_alt", Float64, self.rel_alt_cb)
         rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
         rospy.Subscriber("/planning/pos_cmd", PositionCommand, self.cmd_cb)
         rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_cb)
@@ -66,9 +67,10 @@ class ROSWpControl:
         print(f"target: {target_x}, {target_y}, {gps[1]}, {gps[0]}")
         
         # ENU坐标
-        enu_x = target_x - home_x  # 东向
-        enu_y = target_y - home_y  # 北向
-        enu_z = gps[2] #- rel_alt  # 上向
+        odom = self.get_cur_odom()
+        enu_x = target_x - home_x + odom.pose.pose.position.x # 东向
+        enu_y = target_y - home_y + odom.pose.pose.position.y  # 北向
+        enu_z = gps[2] - self.rel_alt + odom.pose.pose.position.z  # 上向
 
         goal = PoseStamped()
         goal.header.frame_id = "map"
@@ -204,7 +206,9 @@ class ROSWpControl:
         with self.odom_lock:
             self.odom = msg
     
-
+    def rel_alt_cb(self, msg):
+        self.rel_alt = msg.data
+    
 class Control(Node):
     def __init__(self):
         super().__init__()
@@ -260,6 +264,9 @@ class Control(Node):
         land = data.get("land", True)
         self.wp_ctrl.set_waypoint(waypoints, speed, land)
         return SUCCESS_RESPONSE()
+    
+    # @Node.route("/stop_follow", "POST")
+    # def 
     
     @Node.route("/takeoff", "POST")
     def takeoff(self, data):

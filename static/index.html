@@ -1007,10 +1007,9 @@
         if (!cell) return;
         if (cell.querySelector("input")) return; // 已经在编辑
         const id = cell.dataset.id;
-        const item = rawData.find((d) => d.id === id);
         const input = document.createElement("input");
         input.type = "text";
-        input.value = item.value;
+        input.value = cell.innerText;
         cell.innerHTML = "";
         cell.appendChild(input);
         input.focus();
@@ -1062,11 +1061,10 @@
       .addEventListener("click", (e) => {
         e.preventDefault(); // 阻止表单默认提交
         Object.entries(updateData).forEach(([name, value]) => {
-          console.log(
-            socketHelper.socket,
-            `param set ${name.toUpperCase()} ${value}`
-          );
-          socketHelper.send(`param set ${name.toUpperCase()} ${value}`);
+          postJson('/set_param', { name, value })
+            .then(res => res.json())
+            .then(resJSON => console.log(resJSON))
+            .catch(err => console.log(err))
         });
         closeModal(dialog);
       });
