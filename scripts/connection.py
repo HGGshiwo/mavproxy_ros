@@ -202,7 +202,7 @@ if __name__ == "__main__":
     rospy.Subscriber("/mavros/global_position/raw/satellites", UInt32, gps_cb)
     rospy.Subscriber("/mavros/global_position/rel_alt", Float64, alt_cb)
     rospy.Subscriber("/mavros/statustext/recv", StatusText, state_cb)
-    rospy.Subscriber("/mavros/ws", String, ws_cb)
+    rospy.Subscriber("/mavproxy/ws", String, ws_cb)
     rospy.loginfo('wait for mavros service')
     rospy.wait_for_service('/mavros/set_stream_rate')
     set_rate = rospy.ServiceProxy('/mavros/set_stream_rate', StreamRate)

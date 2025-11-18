@@ -35,10 +35,11 @@ class ROSWpControl:
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=1)
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
         self.ws_pub = rospy.Publisher("/mavros/ws", String, queue_size=1)
+        self.rel_alt = 0
         
         rospy.Subscriber("/mavros/global_position/raw/fix", NavSatFix, self.gps_cb)
         rospy.Subscriber("/mavros/local_position/odom", Odometry, self.odom_cb)
-        rospy.Subscriber("/mavros/local_position/rel_alt", Float64, self.rel_alt_cb)
+        rospy.Subscriber("/mavros/global_position/rel_alt", Float64, self.rel_alt_cb)
         rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
         rospy.Subscriber("/planning/pos_cmd", PositionCommand, self.cmd_cb)
         rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_cb)
