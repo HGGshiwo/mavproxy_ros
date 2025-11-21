@@ -173,10 +173,5 @@ class Node:
     
     def run(self):
         self.register()
-        t = threading.Thread(
-            target=lambda: asyncio.run(self.async_run()),
-            daemon=True
-        )
-        t.start()
         rospy.loginfo(f"{self.__class__.__name__.lower()} start")
-        rospy.spin()
+        asyncio.run(self.async_run())

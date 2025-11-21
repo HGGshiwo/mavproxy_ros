@@ -2,13 +2,10 @@
 # -*- coding: utf-8 -*-
 from base.node import SUCCESS_RESPONSE, Node
 from mavros_msgs.srv import ParamPull, ParamGet
-from mavros_msgs.msg import Param
 from base.utils import ERROR_RESPONSE
 import xml.etree.ElementTree as ET
 from pathlib import Path
-import json
 import rospy
-import time
 
 def parse_param(param):
     if param.integer != 0:
