@@ -164,7 +164,7 @@ class ROSWpControl:
         )
         
         # 设置值
-        target.velocity = Vector3(vx, -vy, -vz) # 速度（机体坐标系，z取反，NED下为正）
+        target.velocity = Vector3(vx, vy, vz) # 速度（机体坐标系，z取反，NED下为正）
         target.yaw = target_yaw
         # 发布
         self.setpoint_pub.publish(target)
@@ -223,10 +223,13 @@ class Control(Node):
         self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         
+        self.ws_pub = rospy.Publihser("/mavproxy_ros/ws", String)
+        
         self.wp_ctrl = ROSWpControl()
         self.rel_alt = 0
         self.sys_status = None
         self.state = None
+        self.last_send = -1
 
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
@@ -240,6 +243,31 @@ class Control(Node):
     def state_cb(self, data):
         self.state = data.text
         
+    @Node.ros("/mavros/ws", String)
+    def detect_cb(self, data):
+        try:
+            data = json.loads(data)
+            if data["event"] != "detect":
+                return
+            cur_time = time.time()
+            if cur_time - self.last_send < 1:
+                return
+            self.last_send = cur_time
+            self.ws_pub(json.dumps(data))
+        except json.JSONDecodeError:
+            pass
+    
+    @Node.ros("/cmd_vel2", Twist)
+    def cmd_vel_cb2(self, data):
+        if time.time() - self.last_send < 1:
+            return
+        self.wp_ctrl.cmd_vel_cb(data)
+    
+    @Node.route("/stop_follow", "POST")
+    def stop_follow(self, data=None):
+        self.last_send = time.time() + 10
+        return SUCCESS_RESPONSE()
+    
     @Node.route("/set_waypoint", "POST")
     def set_waypoint(self, data):
         waypoints = data["waypoint"]
@@ -266,8 +294,6 @@ class Control(Node):
         self.wp_ctrl.set_waypoint(waypoints, speed, land)
         return SUCCESS_RESPONSE()
     
-    # @Node.route("/stop_follow", "POST")
-    # def 
     
     @Node.route("/takeoff", "POST")
     def takeoff(self, data):
