@@ -22,6 +22,7 @@ from mavros_msgs.msg import StatusText
 from std_msgs.msg import Empty
 import time
 
+
 loop = None
 def run_in_loop(task):
     global loop

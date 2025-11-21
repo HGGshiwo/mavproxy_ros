@@ -164,6 +164,7 @@
     <button class="button" onclick="carCrash('bucket')">小车打击</button>
     <button class="button" onclick="droneCrash()">飞机打击</button>
     <button class="button" onclick="stopCrash()">停止打击</button>
+    <button class="button" onclick="stopFollow()">停止跟随</button>
     <button class="button" onclick="testCar()" id="test-button">
       小车测试
     </button>
@@ -795,6 +796,12 @@
 
   const stopCrash = () => {
     fetch(`/stop_crash`)
+      .then((res) => res.json())
+      .then(handleRes, err => alert(err))
+  }
+
+    const stopFollow = () => {
+    postJson(`/stop_follow`)
       .then((res) => res.json())
       .then(handleRes, err => alert(err))
   }

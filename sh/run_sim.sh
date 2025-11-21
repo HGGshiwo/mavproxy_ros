@@ -10,3 +10,5 @@ rostopic pub -r 10 /ugv_0/cmd_vel geometry_msgs/Twist -- '[0.1, 0, 0]' '[0, 0, 0
 rosrun mavproxy_ros key_contrl.py
 
 rosservice call /mavros/param/get "param_id: 'PLND_ENABLED'"
+
+rostopic pub /mavros/ws std_msgs/String 'data: "{\"type\": \"event\", \"event\": \"detect\"}"' --rate 10

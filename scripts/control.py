@@ -19,6 +19,9 @@ from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE
 from base.node import Node
 import time
 
+DETECT_SPAN = 1
+STOP_SPAN = 10
+
 class ROSWpControl:
     def __init__(self):
         self.odom = None
@@ -33,7 +36,6 @@ class ROSWpControl:
         self.odom_lock = threading.Lock()
         
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=1)
-        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
         self.ws_pub = rospy.Publisher("/mavros/ws", String, queue_size=1)
         self.rel_alt = 0
         
@@ -42,7 +44,6 @@ class ROSWpControl:
         rospy.Subscriber("/mavros/global_position/rel_alt", Float64, self.rel_alt_cb)
         rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
         rospy.Subscriber("/planning/pos_cmd", PositionCommand, self.cmd_cb)
-        rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_cb)
         
     
     def gps_cb(self, data: NavSatFix):
@@ -130,44 +131,6 @@ class ROSWpControl:
                 print(f"error: odom and PositionCommand time diff:{time_diff}")
                 return
         return odom_msg
-    
-    def cmd_vel_cb(self, cmd_vel_msg):
-        odom_msg = self.get_cur_odom()
-        if odom_msg is None:
-            return
-
-        # 2. 获取 cmd_vel 中的速度（机体坐标系，无需转换）
-        vx = cmd_vel_msg.linear.x  # 机体前向速度
-        vy = cmd_vel_msg.linear.y  # 机体左向速度
-        vz = cmd_vel_msg.linear.z  # 机体上向速度
-        # delta_yaw = cmd_vel_msg.angular.z  # 期望的yaw增量（弧度）
-        target_yaw = cmd_vel_msg.angular.z
-
-        # 4. 发送 MAVLink 速度+yaw控制
-        # 构造MAVLink消息
-        target = PositionTarget()
-        target.header.stamp = rospy.Time.now()
-        target.header.frame_id = "local_ned"
-        
-        # 坐标系选择
-        target.coordinate_frame = PositionTarget.FRAME_BODY_OFFSET_NED
-        
-        # 类型掩码：使用位置+速度
-        target.type_mask = (
-            PositionTarget.IGNORE_AFX |      # 忽略加速度x
-            PositionTarget.IGNORE_AFY |      # 忽略加速度y
-            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
-            PositionTarget.IGNORE_PX |
-            PositionTarget.IGNORE_PY |
-            PositionTarget.IGNORE_PZ |
-            PositionTarget.IGNORE_YAW_RATE   # 忽略偏航速率
-        )
-        
-        # 设置值
-        target.velocity = Vector3(vx, vy, vz) # 速度（机体坐标系，z取反，NED下为正）
-        target.yaw = target_yaw
-        # 发布
-        self.setpoint_pub.publish(target)
         
     def cmd_cb(self, msg):
         p_des_odom = np.array([msg.position.x, msg.position.y, msg.position.z])
@@ -223,14 +186,56 @@ class Control(Node):
         self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         
-        self.ws_pub = rospy.Publihser("/mavproxy_ros/ws", String)
+        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
+        self.ws_pub = rospy.Publisher("/mavproxy/ws", String)
         
         self.wp_ctrl = ROSWpControl()
         self.rel_alt = 0
         self.sys_status = None
         self.state = None
         self.last_send = -1
+    
+    @Node.ros("/cmd_vel", Twist)
+    def cmd_vel_cb(self, cmd_vel_msg):
+        if time.time() - self.last_send < DETECT_SPAN:
+            return
+        odom_msg = self.wp_ctrl.get_cur_odom()
+        if odom_msg is None:
+            return
 
+        # 2. 获取 cmd_vel 中的速度（机体坐标系，无需转换）
+        vx = cmd_vel_msg.linear.x  # 机体前向速度
+        vy = cmd_vel_msg.linear.y  # 机体左向速度
+        vz = cmd_vel_msg.linear.z  # 机体上向速度
+        # delta_yaw = cmd_vel_msg.angular.z  # 期望的yaw增量（弧度）
+        target_yaw = cmd_vel_msg.angular.z
+
+        # 4. 发送 MAVLink 速度+yaw控制
+        # 构造MAVLink消息
+        target = PositionTarget()
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = "local_ned"
+        
+        # 坐标系选择
+        target.coordinate_frame = PositionTarget.FRAME_BODY_OFFSET_NED
+        
+        # 类型掩码：使用位置+速度
+        target.type_mask = (
+            PositionTarget.IGNORE_AFX |      # 忽略加速度x
+            PositionTarget.IGNORE_AFY |      # 忽略加速度y
+            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
+            PositionTarget.IGNORE_PX |
+            PositionTarget.IGNORE_PY |
+            PositionTarget.IGNORE_PZ |
+            PositionTarget.IGNORE_YAW_RATE   # 忽略偏航速率
+        )
+        
+        # 设置值
+        target.velocity = Vector3(vx, vy, vz) # 速度（机体坐标系，z取反，NED下为正）
+        target.yaw = target_yaw
+        # 发布
+        self.setpoint_pub.publish(target)
+        
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
@@ -246,26 +251,21 @@ class Control(Node):
     @Node.ros("/mavros/ws", String)
     def detect_cb(self, data):
         try:
-            data = json.loads(data)
-            if data["event"] != "detect":
+            data = json.loads(data.data)
+            if data.get("event", None) != "detect":
                 return
             cur_time = time.time()
-            if cur_time - self.last_send < 1:
+            if cur_time - self.last_send < DETECT_SPAN:
                 return
             self.last_send = cur_time
-            self.ws_pub(json.dumps(data))
+            self.ws_pub.publish(json.dumps(data))
         except json.JSONDecodeError:
             pass
-    
-    @Node.ros("/cmd_vel2", Twist)
-    def cmd_vel_cb2(self, data):
-        if time.time() - self.last_send < 1:
-            return
-        self.wp_ctrl.cmd_vel_cb(data)
+
     
     @Node.route("/stop_follow", "POST")
     def stop_follow(self, data=None):
-        self.last_send = time.time() + 10
+        self.last_send = time.time() + STOP_SPAN
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_waypoint", "POST")
