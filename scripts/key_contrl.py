@@ -46,7 +46,7 @@ def main():
     pygame.display.set_caption("ROS Teleop Instructions")
 
     font = pygame.font.SysFont(None, 24)
-    control = {'x': 0.0, 'y': 0.0, 'z': 0, 'th': 0.0}
+    control = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'th': 0.0}
     pressed = set()
     running = True
     clock = pygame.time.Clock()
@@ -64,27 +64,21 @@ def main():
                     axis, value = key_map[event.key]
                     control[axis] += value
                     pressed.add(event.key)
-                    twist = Twist()
-                    twist.linear.x = control['x']
-                    twist.linear.y = control['y']
-                    twist.angular.z = control['th']
-                    twist.linear.z = control['z']
-                    pub.publish(twist)
             elif event.type == pygame.KEYUP:
                 if event.key in key_map and event.key in pressed:
                     axis, value = key_map[event.key]
                     control[axis] -= value
                     pressed.remove(event.key)
-                    twist = Twist()
-                    twist.linear.x = control['x']
-                    twist.linear.y = control['y']
-                    twist.linear.z = control['z']
-                    twist.angular.z = control['th']
-                    
-                    pub.publish(twist)
+        # 持续发送当前速度
+        twist = Twist()
+        twist.linear.x = control['x']
+        twist.linear.y = control['y']
+        twist.linear.z = control['z']
+        twist.angular.z = control['th']
+        pub.publish(twist)
         clock.tick(50)
 
-    pub.publish(Twist())
+    pub.publish(Twist())  # 停止
     pygame.quit()
     print("\nExit keyboard teleop.")
 
