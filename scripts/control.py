@@ -18,6 +18,7 @@ import numpy as np
 from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE
 from base.node import Node
 import time
+import math
 
 DETECT_SPAN = 1
 STOP_SPAN = 10
@@ -43,14 +44,17 @@ class ROSWpControl:
         rospy.Subscriber("/mavros/local_position/odom", Odometry, self.odom_cb)
         rospy.Subscriber("/mavros/global_position/rel_alt", Float64, self.rel_alt_cb)
         rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
-        rospy.Subscriber("/planning/pos_cmd", PositionCommand, self.cmd_cb)
         
     
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
         self.lon = data.longitude
-        
-    def gps2local(self, lat, lng, gps):
+    
+    def gps_target2enu_diff(self, gps):
+        """ 获取enu坐标系下相对机体位置的偏移
+        """
+        lng = self.lon
+        lat = self.lat
         # WGS84地理坐标系
         crs_wgs84 = CRS.from_epsg(4326)
 
@@ -63,16 +67,22 @@ class ROSWpControl:
 
         # home点的UTM坐标
         home_x, home_y = transformer.transform(lat, lng)
-        print(f"home: {home_x}, {home_y}, {lat}, {lng}")
+        # print(f"home: {home_x}, {home_y}, {lat}, {lng}")
         # 目标点
         target_x, target_y = transformer.transform(gps[1], gps[0])
-        print(f"target: {target_x}, {target_y}, {gps[1]}, {gps[0]}")
+        # print(f"target: {target_x}, {target_y}, {gps[1]}, {gps[0]}")
+        return [target_x - home_x, target_y - home_y, gps[2] - self.rel_alt]
+    
+    def gps_target2goal(self, gps):
+        """gps目标点转为move_base_simple/goal目标
+        """
         
+        diff_x, diff_y, diff_z = self.gps_target2enu_diff(gps)
         # ENU坐标
         odom = self.get_cur_odom()
-        enu_x = target_x - home_x + odom.pose.pose.position.x # 东向
-        enu_y = target_y - home_y + odom.pose.pose.position.y  # 北向
-        enu_z = gps[2] - self.rel_alt + odom.pose.pose.position.z  # 上向
+        enu_x = diff_x + odom.pose.pose.position.x # 东向
+        enu_y = diff_y + odom.pose.pose.position.y  # 北向
+        enu_z = diff_z + odom.pose.pose.position.z  # 上向
 
         goal = PoseStamped()
         goal.header.frame_id = "map"
@@ -115,9 +125,12 @@ class ROSWpControl:
             if self.land:
                 self.set_mode_service(0, "LAND")
             return
-        self.wp_pub.publish(self.gps2local(self.lat, self.lon, self.waypoint[self.wp_idx]))
+        self.publish_cur_wp()
         self.wp_idx += 1
 
+    def publish_cur_wp(self):
+        self.wp_pub.publish(self.gps_target2goal(self.waypoint[self.wp_idx]))
+    
     def get_cur_odom(self, t_cmd=None):
         with self.odom_lock:
             if self.odom is None:
@@ -132,39 +145,6 @@ class ROSWpControl:
                 return
         return odom_msg
         
-    def cmd_cb(self, msg):
-        p_des_odom = np.array([msg.position.x, msg.position.y, msg.position.z])
-        yaw_des = msg.yaw #- np.pi / 2
-
-        # 构造MAVLink消息
-        target = PositionTarget()
-        target.header.stamp = rospy.Time.now()
-        target.header.frame_id = "local_ned"
-        
-        # 坐标系选择
-        target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
-        
-        # 类型掩码：使用位置+速度
-        target.type_mask = (
-            PositionTarget.IGNORE_AFX |      # 忽略加速度x
-            PositionTarget.IGNORE_AFY |      # 忽略加速度y
-            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
-            PositionTarget.IGNORE_VX |
-            PositionTarget.IGNORE_VY |
-            PositionTarget.IGNORE_VZ |
-            PositionTarget.IGNORE_YAW_RATE   # 忽略偏航速率
-        )
-        
-        # 设置值
-        # target.position = Vector3(ned_p[0], ned_p[1], ned_p[2])
-        # target.velocity = Vector3(ned_v[0], ned_v[1], ned_v[2])
-        # target.acceleration_or_force = Vector3(ned_a[0], ned_a[1], ned_a[2])
-        target.position = Vector3(p_des_odom[0], p_des_odom[1], p_des_odom[2])
-        target.yaw = yaw_des
-        target.yaw_rate = 0
-        
-        # 发布
-        self.setpoint_pub.publish(target)
 
     def odom_cb(self, msg):
         with self.odom_lock:
@@ -194,11 +174,16 @@ class Control(Node):
         self.sys_status = None
         self.state = None
         self.last_send = -1
+        self.following = False # 跟随发布的命令 
+    
+    @Node.ros("/cmd_vel2", Twist)
+    def cmd_vel_cb2(self, cmd_vel_msg):
+        if not self.following:
+            return
+        return self.cmd_vel_cb(cmd_vel_msg)
     
     @Node.ros("/cmd_vel", Twist)
     def cmd_vel_cb(self, cmd_vel_msg):
-        if time.time() - self.last_send < DETECT_SPAN:
-            return
         odom_msg = self.wp_ctrl.get_cur_odom()
         if odom_msg is None:
             return
@@ -247,7 +232,7 @@ class Control(Node):
     @Node.ros("/mavros/statustext/recv", StatusText)
     def state_cb(self, data):
         self.state = data.text
-        
+      
     @Node.ros("/mavros/ws", String)
     def detect_cb(self, data):
         try:
@@ -257,15 +242,99 @@ class Control(Node):
             cur_time = time.time()
             if cur_time - self.last_send < DETECT_SPAN:
                 return
+            self.following = True
             self.last_send = cur_time
             self.ws_pub.publish(json.dumps(data))
         except json.JSONDecodeError:
             pass
+    
+    @Node.ros("/planning/pos_cmd", PositionCommand)
+    def cmd_cb(self, msg):
+        if self.following:
+            return
+        p_des_odom = np.array([msg.position.x, msg.position.y, msg.position.z])
+        yaw_des = msg.yaw #- np.pi / 2
 
+        # 构造MAVLink消息
+        target = PositionTarget()
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = "local_ned"
+        
+        # 坐标系选择
+        target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+        
+        # 类型掩码：使用位置+速度
+        target.type_mask = (
+            PositionTarget.IGNORE_AFX |      # 忽略加速度x
+            PositionTarget.IGNORE_AFY |      # 忽略加速度y
+            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
+            PositionTarget.IGNORE_VX |
+            PositionTarget.IGNORE_VY |
+            PositionTarget.IGNORE_VZ |
+            PositionTarget.IGNORE_YAW_RATE   # 忽略偏航速率
+        )
+        
+        # 设置值
+        # target.position = Vector3(ned_p[0], ned_p[1], ned_p[2])
+        # target.velocity = Vector3(ned_v[0], ned_v[1], ned_v[2])
+        # target.acceleration_or_force = Vector3(ned_a[0], ned_a[1], ned_a[2])
+        target.position = Vector3(p_des_odom[0], p_des_odom[1], p_des_odom[2])
+        target.yaw = yaw_des
+        target.yaw_rate = 0
+        
+        # 发布
+        self.setpoint_pub.publish(target)
+    
+    @Node.route("/pos_vel", "POST")
+    def set_pos_vel(self, data):
+        pos = data["pos"]
+        v = data["vel"]
+        diff_x, diff_y, diff_z = self.wp_ctrl.gps_target2enu_diff(pos)
+        distance = math.sqrt((diff_x * diff_x) + (diff_y * diff_y))
+        if distance < 0.5:
+            distance = 0
+        if distance < v * v:
+            v = math.sqrt(distance)
+
+        radian = math.atan2(diff_y, diff_x)
+        vx = v * math.cos(radian)
+        vy = v * math.sin(radian)
+        vz = 0.2 * np.clip(diff_z, -0.5, 0.5)
+        # 构造MAVLink消息
+        target = PositionTarget()
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = "local_ned"
+        
+        # 坐标系选择
+        target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+        
+        # 类型掩码：使用位置+速度
+        target.type_mask = (
+            PositionTarget.IGNORE_AFX |      # 忽略加速度x
+            PositionTarget.IGNORE_AFY |      # 忽略加速度y
+            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
+            PositionTarget.IGNORE_PX |
+            PositionTarget.IGNORE_PY |
+            PositionTarget.IGNORE_PZ |
+            PositionTarget.IGNORE_YAW |
+            PositionTarget.IGNORE_YAW_RATE   # 忽略偏航速率
+        )
+        
+        # 设置值
+        # target.position = Vector3(ned_p[0], ned_p[1], ned_p[2])
+        # target.velocity = Vector3(ned_v[0], ned_v[1], ned_v[2])
+        # target.acceleration_or_force = Vector3(ned_a[0], ned_a[1], ned_a[2])
+        target.velocity = Vector3(vx, vy, vz)
+        # 发布
+        self.setpoint_pub.publish(target)
+        return SUCCESS_RESPONSE()
+        
     
     @Node.route("/stop_follow", "POST")
     def stop_follow(self, data=None):
         self.last_send = time.time() + STOP_SPAN
+        self.following = False
+        self.wp_ctrl.publish_cur_wp()
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_waypoint", "POST")

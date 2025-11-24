@@ -2,6 +2,7 @@
 import rospy
 from geometry_msgs.msg import Twist
 import pygame
+from argparse import ArgumentParser
 
 key_map = {
     pygame.K_w: ('x', 1.0),
@@ -37,8 +38,12 @@ def draw_usage(screen, font):
         screen.blit(text, (10, 10 + i * 28))
 
 def main():
+    paser = ArgumentParser()
+    paser.add_argument("--topic", type=str, default="/cmd_vel")
+    args = paser.parse_args()
+    
     rospy.init_node('pygame_teleop')
-    pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+    pub = rospy.Publisher(args.topic, Twist, queue_size=1)
 
     pygame.init()
     win_width, win_height = 420, 28 * len(usage_lines) + 20

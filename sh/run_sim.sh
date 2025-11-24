@@ -8,7 +8,7 @@ roslaunch mavproxy_ros onclick_run.launch
 rosrun mavros mavsys rate --all 10
 rostopic pub -r 10 /ugv_0/cmd_vel geometry_msgs/Twist -- '[0.1, 0, 0]' '[0, 0, 0]'
 rosrun mavproxy_ros key_contrl.py
-
+roslaunch ego_planner single_run_in_exp.launch odom_topic:=/mavros/local_position/odom
 rosservice call /mavros/param/get "param_id: 'PLND_ENABLED'"
 
 rostopic pub /mavros/ws std_msgs/String 'data: "{\"type\": \"event\", \"event\": \"detect\"}"' --rate 10
