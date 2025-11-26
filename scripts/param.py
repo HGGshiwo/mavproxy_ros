@@ -6,6 +6,8 @@ from base.utils import ERROR_RESPONSE
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import rospy
+from rsos_msgs.srv import StartBagRecord
+from std_msgs.srv import Trigger
 
 def parse_param(param):
     if param.integer != 0:
@@ -20,7 +22,6 @@ class ParamNode(Node):
         rospy.wait_for_service('/mavros/param/pull')
         rospy.wait_for_service('/mavros/param/get')
         rospy.wait_for_service('/mavros/param/set')
-        self.get_srv = rospy.ServiceProxy('/mavros/param/get', ParamGet)
         
         pdef_path = str(Path(__file__).parent.parent.joinpath("config", "apm.pdef.xml"))
         self.pdef = self.load_pdef(pdef_path)
@@ -42,6 +43,24 @@ class ParamNode(Node):
                 'help': help_text
             }
         return params
+    
+    @Node.route("/start_record", "POST")
+    def start_record(self, data):
+        service_name = "/data_recorder/start_recording"
+        rospy.wait_for_service(service_name)
+        srv = rospy.ServiceProxy(service_name, StartBagRecord)
+        res = srv(prefix=data["bag_name"])
+        if not res.success:
+            return ERROR_RESPONSE(res.message)
+        return SUCCESS_RESPONSE()
+    
+    @Node.route("/stop_record", "POST")
+    def stop_record(self, data=None):
+        service_name = "/data_recorder/stop_recording"
+        rospy.wait_for_service(service_name)
+        srv = rospy.ServiceProxy(service_name, Trigger)
+        res = srv()
+        return SUCCESS_RESPONSE()
     
     @Node.route("/set_param", "POST")
     def set_param(self, data):
