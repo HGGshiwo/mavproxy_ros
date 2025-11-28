@@ -169,7 +169,6 @@ class Control(Node):
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
-        self.ws_pub = rospy.Publisher("ws", String)
         
         self.wp_ctrl = ROSWpControl()
         self.rel_alt = 0
@@ -246,7 +245,7 @@ class Control(Node):
                 return
             self.following = True
             self.last_send = cur_time
-            self.ws_pub.publish(json.dumps(data))
+            self.wp_ctrl.ws_pub.publish(json.dumps(data))
         except json.JSONDecodeError:
             pass
     
@@ -288,9 +287,8 @@ class Control(Node):
         self.setpoint_pub.publish(target)
     
     @Node.route("/pos_vel", "POST")
-    def set_pos_vel(self, data):
-        pos = data["pos"]
-        v = data["vel"]
+    def set_pos_vel(self, pos, vel):
+        v = vel
         diff_x, diff_y, diff_z = self.wp_ctrl.gps_target2enu_diff(pos)
         distance = math.sqrt((diff_x * diff_x) + (diff_y * diff_y))
         if distance < 0.5:
@@ -333,46 +331,40 @@ class Control(Node):
         
     
     @Node.route("/stop_follow", "POST")
-    def stop_follow(self, data=None):
+    def stop_follow(self):
         self.last_send = time.time() + STOP_SPAN
         self.following = False
         self.wp_ctrl.publish_cur_wp()
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_waypoint", "POST")
-    def set_waypoint(self, data):
-        waypoints = data["waypoint"]
-        speed = data.get("speed", None)
-        land = data.get("land", False)
-        self.wp_ctrl.set_waypoint(waypoints, speed, land)
+    def set_waypoint(self, waypoint, speed=None, land=False):
+        self.wp_ctrl.set_waypoint(waypoint, speed, land)
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_mode", "POST")
-    def set_mode(self, data):
-        self.set_mode_service(0, data["mode"])
+    def set_mode(self, mode):
+        self.set_mode_service(0, mode)
         return SUCCESS_RESPONSE()
 
     @Node.route("/land", "POST")
-    def land(self, data=None):
+    def land(self):
         self.set_mode_service(0, 'LAND')
         return SUCCESS_RESPONSE()
         
     @Node.route("/return", "POST")
-    def _return(self, data):
-        waypoints = data["waypoints"]
-        speed = data.get("speed", None)
-        land = data.get("land", True)
+    def _return(self, waypoint, speed=None, land=True):
         self.wp_ctrl.set_waypoint(waypoints, speed, land)
         return SUCCESS_RESPONSE()
     
     
     @Node.route("/takeoff", "POST")
-    def takeoff(self, data):
+    def takeoff(self, alt):
         self.set_mode_service(0, 'GUIDED')
         
         # 解锁
         out = self.prearm()["msg"]
-        if out["arm"] == False:
+        if out.get("arm", False) == False:
             return ERROR_RESPONSE(out["reason"])
         res = self.arm_service(True)
         if res.result == 1:
@@ -386,26 +378,26 @@ class Control(Node):
             yaw=0,
             latitude=0,
             longitude=0,
-            altitude=data["alt"]  # Target altitude in meters
+            altitude=alt  # Target altitude in meters
         )
         rospy.loginfo("Takeoff command finished.")
-        self.wp_ctrl.set_home(data["alt"])
+        self.wp_ctrl.set_home(alt)
         return SUCCESS_RESPONSE()
     
     @Node.route("/get_gps", "GET")
-    def get_gps(self, data=None):
+    def get_gps(self):
         return {
             "msg": [self.wp_ctrl.lon, self.wp_ctrl.lat, self.rel_alt],
             "status": "succecss"
         }
     
     @Node.route("/arm", "POST")
-    def do_arm(self, data=None):
+    def do_arm(self):
         res = self.arm_service(True)
         return SUCCESS_RESPONSE()
     
     @Node.route("/prearms", "GET")
-    def prearm(self, data=None):
+    def prearm(self):
         # mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK
         self.state = None
         response = self.cmd_service(

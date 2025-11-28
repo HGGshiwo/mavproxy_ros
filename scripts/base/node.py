@@ -121,14 +121,17 @@ class Node:
         
     def register_route(self, data=None):
         for path, method, func in self.route_list:
-            if path.startswith("/"):
-                topic = "/" + path[1:].replace("/", "_")
+            topic = path.split("{")[0] # 忽略url参数
+            topic = topic.split("?")[0] # 忽略查询参数
+            
+            if topic.startswith("/"):
+                topic = "/" + topic[1:].replace("/", "_")
             else:
-                topic = path.replace("/", "_")
+                topic = topic.replace("/", "_")
             # 闭包陷阱
             def _cb(data, func=func):
                 try:
-                    res = func(self, json.loads(data.request))
+                    res = func(self, **json.loads(data.request))
                     return ProcessRequestResponse(response=json.dumps(res))
                 except Exception as e:
                     import traceback
@@ -142,7 +145,7 @@ class Node:
                 rospy.Service(topic, ProcessRequest, _cb)
             except rospy.service.ServiceException:
                 pass # 可能重复被调用
-            res = self.register_service(path=path, method=method, topic=path)
+            res = self.register_service(path=path, method=method, topic=topic)
             response = json.loads(res.response)
             if not response["status"] == "success":
                 raise ValueError("register service died")

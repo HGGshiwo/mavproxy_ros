@@ -21,7 +21,7 @@ from mavros_msgs.srv import StreamRate, StreamRateRequest
 from mavros_msgs.msg import StatusText
 from std_msgs.msg import Empty
 import time
-
+from fastapi.middleware.cors import CORSMiddleware
 
 loop = None
 def run_in_loop(task):
@@ -40,14 +40,24 @@ class RequestHandler:
         rospy.wait_for_service(topic)
         self.service = rospy.ServiceProxy(topic, ProcessRequest)
             
-    async def __call__(self, request_data: dict=None):
+    async def __call__(self, request: Request):
+        request_data = {}
+        request_data.update(request.path_params)
+        request_data.update(request.query_params)
+        try:
+            body = await request.json()
+            request_data.update(body)
+        except Exception as e:
+            rospy.logerr(e)
+            pass  # 没有body或者不是json格式
+            
         response = self.service(request=json.dumps(request_data))
         return json.loads(response.response)
 
 class WSManager:
     def __init__(self):
         self.ws_list = []
-        self.data = {"type": "state"}
+        self.data = {"type": "state", "connected": False, "record": False}
         self.lock = threading.Lock()
         
     async def add(self, ws):
@@ -81,6 +91,14 @@ class WSManager:
             self.remove(ws)
                 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 或指定你的前端地址
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有请求方法
+    allow_headers=["*"],  # 允许所有请求头
+)
+
 ws_manager = WSManager()
 
 def get_manager():
@@ -151,7 +169,7 @@ async def websocket_endpoint(websocket: WebSocket, ws_manager: WSManager = Depen
 
 def mode_cb(data):
     global ws_manager
-    if data.armed == False and ws_manager.data["arm"] == True:
+    if data.armed == False and ws_manager.data.get("arm", False) == True:
         ws_manager.publish({"event": "disarm"}, "event")
     ws_manager.publish({"mode": data.mode, "arm": data.armed, "connected": data.connected})
     
@@ -172,7 +190,9 @@ def state_cb(data):
 
 def ws_cb(data):
     global ws_manager
-    ws_manager.publish(json.loads(data.data), "event")
+    data = json.loads(data.data)
+    data_type = data.get("type", "event")
+    ws_manager.publish(data, data_type)
 
 async def run_server():
     config = Config(app, host="0.0.0.0", port=8000)

@@ -55,7 +55,7 @@ class ParamNode(Node):
     
         
     @Node.route("/params", "GET")
-    def get_params(self, _):
+    def get_params(self):
         
         param_pull = rospy.ServiceProxy('/mavros/param/pull', ParamPull)
         self.param_num = 0
