@@ -30,7 +30,7 @@ class ROSWpControl:
         self.lon = None
         self.land = None
         self.speed = None
-        self.waypoint = None
+        self.waypoint = []
         self.takeoff_lat = None
         self.takeoff_lon = None
         self.takeoff_alt = None
@@ -44,8 +44,8 @@ class ROSWpControl:
         rospy.Subscriber("/mavros/local_position/odom", Odometry, self.odom_cb)
         rospy.Subscriber("/mavros/global_position/rel_alt", Float64, self.rel_alt_cb)
         rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
+        self.wp_idx = 0
         
-    
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
         self.lon = data.longitude
@@ -129,6 +129,8 @@ class ROSWpControl:
         self.wp_idx += 1
 
     def publish_cur_wp(self):
+        if self.wp_idx >= len(self.waypoint):
+            return
         self.wp_pub.publish(self.gps_target2goal(self.waypoint[self.wp_idx]))
     
     def get_cur_odom(self, t_cmd=None):
@@ -167,7 +169,7 @@ class Control(Node):
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
-        self.ws_pub = rospy.Publisher("/mavproxy/ws", String)
+        self.ws_pub = rospy.Publisher("ws", String)
         
         self.wp_ctrl = ROSWpControl()
         self.rel_alt = 0

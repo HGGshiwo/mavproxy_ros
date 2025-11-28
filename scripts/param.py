@@ -6,8 +6,6 @@ from base.utils import ERROR_RESPONSE
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import rospy
-from rsos_msgs.srv import StartBagRecord
-from std_srvs.srv import Trigger
 import rospkg
 import os
 
@@ -50,29 +48,12 @@ class ParamNode(Node):
             }
         return params
     
-    @Node.route("/start_record", "POST")
-    def start_record(self, data):
-        service_name = "/data_recorder/start_recording"
-        rospy.wait_for_service(service_name)
-        srv = rospy.ServiceProxy(service_name, StartBagRecord)
-        res = srv(prefix=data["bag_name"])
-        if not res.success:
-            return ERROR_RESPONSE(res.message)
-        return SUCCESS_RESPONSE(res.message)
-    
-    @Node.route("/stop_record", "POST")
-    def stop_record(self, data=None):
-        service_name = "/data_recorder/stop_recording"
-        rospy.wait_for_service(service_name)
-        srv = rospy.ServiceProxy(service_name, Trigger)
-        res = srv()
-        return SUCCESS_RESPONSE()
-    
     @Node.route("/set_param", "POST")
     def set_param(self, data):
         super().set_param(data["name"], data["value"])
         return SUCCESS_RESPONSE("OK")
     
+        
     @Node.route("/params", "GET")
     def get_params(self, _):
         

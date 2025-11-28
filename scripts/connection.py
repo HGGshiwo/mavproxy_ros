@@ -151,7 +151,10 @@ async def websocket_endpoint(websocket: WebSocket, ws_manager: WSManager = Depen
 
 def mode_cb(data):
     global ws_manager
+    if data.armed == False and ws_manager.data["arm"] == True:
+        ws_manager.publish({"event": "disarm"}, "event")
     ws_manager.publish({"mode": data.mode, "arm": data.armed, "connected": data.connected})
+    
     
 def gps_cb(data):
     global ws_manager
@@ -203,14 +206,14 @@ if __name__ == "__main__":
     rospy.Subscriber("/mavros/global_position/raw/satellites", UInt32, gps_cb)
     rospy.Subscriber("/mavros/global_position/rel_alt", Float64, alt_cb)
     rospy.Subscriber("/mavros/statustext/recv", StatusText, state_cb)
-    rospy.Subscriber("/mavproxy/ws", String, ws_cb)
+    rospy.Subscriber("ws", String, ws_cb)
     rospy.loginfo('wait for mavros service')
     rospy.wait_for_service('/mavros/set_stream_rate')
     set_rate = rospy.ServiceProxy('/mavros/set_stream_rate', StreamRate)
     rospy.loginfo("done")
     
-    rospy.Service("/mavproxy/register", Register, register_cb)
-    start_pub = rospy.Publisher("/mavproxy/do_register", Empty, queue_size=10)
+    rospy.Service("register", Register, register_cb)
+    start_pub = rospy.Publisher("do_register", Empty, queue_size=10)
     
     req = StreamRateRequest()
     req.stream_id = 0

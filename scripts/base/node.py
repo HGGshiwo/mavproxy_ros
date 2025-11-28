@@ -22,11 +22,11 @@ class Node:
         self.name = self.__class__.__name__.lower()
         rospy.init_node(self.name)
         rospy.wait_for_service('/mavros/param/set')
-        rospy.wait_for_service('/mavproxy/register')
+        rospy.wait_for_service('register')
         self.param_set_service = rospy.ServiceProxy('/mavros/param/set', ParamSet)
-        self.register_service = rospy.ServiceProxy('/mavproxy/register', Register)
+        self.register_service = rospy.ServiceProxy('register', Register)
         self.rc_override_pub = rospy.Publisher('/mavros/rc/override', OverrideRCIn, queue_size=10)
-        rospy.Subscriber('/mavproxy/do_register', Empty, self.register_route)
+        rospy.Subscriber('do_register', Empty, self.register_route)
         self.set_config()
     
     def get_param(self, name):

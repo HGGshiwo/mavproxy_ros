@@ -1,0 +1,6 @@
+param:
+  node_cfg: 
+    - title: 相机
+      topic: /UAV0/sensor/video11_camera/enable_send  
+    - title: /UAV0/perception/yolo_detection/enable_detection
+      topic: 检测
