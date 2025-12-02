@@ -19,12 +19,33 @@ from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE
 from base.node import Node
 import time
 import math
+from mavros_msgs.msg import State
 
 DETECT_SPAN = 1
-STOP_SPAN = 10
-
-class ROSWpControl:
+STOP_SPAN = 10  
+TAKEOFF_THRESHOLD = 1
+    
+class Control(Node):
     def __init__(self):
+        super().__init__()
+        rospy.loginfo("wait for mavros service...")
+        rospy.wait_for_service('/mavros/cmd/arming')
+        rospy.wait_for_service('/mavros/set_mode')
+        rospy.wait_for_service('/mavros/cmd/takeoff')
+        rospy.loginfo("done")
+        self.takeoff_srv = rospy.ServiceProxy('/mavros/cmd/takeoff', CommandTOL)
+        self.arm_service = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
+        self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
+        self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
+        
+        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
+        
+        self.rel_alt = 0
+        self.sys_status = None
+        self.state = None
+        self.last_send = -1
+        self.following = False # 跟随发布的命令
+        self.arm = False
         self.odom = None
         self.lat = None
         self.lon = None
@@ -37,18 +58,11 @@ class ROSWpControl:
         self.odom_lock = threading.Lock()
         
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=1)
-        self.ws_pub = rospy.Publisher("/mavros/ws", String, queue_size=1)
-        self.rel_alt = 0
+        self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=1)
         
-        rospy.Subscriber("/mavros/global_position/raw/fix", NavSatFix, self.gps_cb)
-        rospy.Subscriber("/mavros/local_position/odom", Odometry, self.odom_cb)
-        rospy.Subscriber("/mavros/global_position/rel_alt", Float64, self.rel_alt_cb)
-        rospy.Subscriber("/ego_planner/finish_event", Empty, self.wp_done_cb)
         self.wp_idx = 0
-        
-    def gps_cb(self, data: NavSatFix):
-        self.lat = data.latitude
-        self.lon = data.longitude
+        self.send_wp = False
+        self.taking_off = False
     
     def gps_target2enu_diff(self, gps):
         """ 获取enu坐标系下相对机体位置的偏移
@@ -70,7 +84,6 @@ class ROSWpControl:
         # print(f"home: {home_x}, {home_y}, {lat}, {lng}")
         # 目标点
         target_x, target_y = transformer.transform(gps[1], gps[0])
-        # print(f"target: {target_x}, {target_y}, {gps[1]}, {gps[0]}")
         return [target_x - home_x, target_y - home_y, gps[2] - self.rel_alt]
     
     def gps_target2goal(self, gps):
@@ -96,38 +109,42 @@ class ROSWpControl:
         goal.pose.orientation.w = 1.0
         return goal
 
-    def set_waypoint(self, waypoint, speed, land):
+    def set_waypoint(self, waypoint, speed, land=False, rtl=False):
         self.waypoint = copy.deepcopy(waypoint)
-        self.land = land
+        self.land = land or rtl
         self.speed = speed
-        if land:
+        if rtl:
+            if self.arm == False:
+                self.set_home(waypoint[0][-1])
             if self.takeoff_lon is None or self.takeoff_lat is None:
-                print("No takeoff position find")
-                return
+                raise ValueError("No takeoff position find")
             self.waypoint.append([self.takeoff_lon, self.takeoff_lat, self.takeoff_alt])
+        
         self.wp_idx = 1 # 忽略第一个点
-        self.wp_done_cb()
+        if self.arm == True:    
+            self.wp_done_cb()
+        else:
+            self.send_wp = True
+            alt = waypoint[0][-1]
+            self.route_takeoff(alt)
+        
+        out = []
+        for i, wp in enumerate(self.waypoint):
+            command = "wp"
+            if i == 0:
+                command = "takeoff"
+            if i == len(self.waypoint) - 1:
+                if self.land:
+                    command = "land"
+            out.append({"num": i, "lat": wp[1], "lon": wp[0], "alt": wp[2], "command": command})
+        self.ws_pub.publish(json.dumps({"mission_data": out, "type": "state"}))
         
     def set_home(self, alt):
         self.takeoff_lat = self.lat
         self.takeoff_lon = self.lon
         self.takeoff_alt = alt
+        self.taking_off = True
     
-    def wp_done_cb(self, data=None):
-        if self.waypoint is None:
-            return
-        self.ws_pub.publish(json.dumps({
-            "event": "progress",
-            "cur": self.wp_idx + 1,
-            "total": len(self.waypoint),
-        }))
-        if self.wp_idx >= len(self.waypoint):
-            if self.land:
-                self.set_mode_service(0, "LAND")
-            return
-        self.publish_cur_wp()
-        self.wp_idx += 1
-
     def publish_cur_wp(self):
         if self.wp_idx >= len(self.waypoint):
             return
@@ -146,37 +163,33 @@ class ROSWpControl:
                 print(f"error: odom and PositionCommand time diff:{time_diff}")
                 return
         return odom_msg
+    
+    @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
+    def gps_cb(self, data: NavSatFix):
+        self.lat = data.latitude
+        self.lon = data.longitude
         
-
+    @Node.ros("/ego_planner/finish_event", Empty)
+    def wp_done_cb(self, data=None):
+        if self.waypoint is None or len(self.waypoint) == 0:
+            return
+        self.ws_pub.publish(json.dumps({
+            "event": "progress",
+            "cur": self.wp_idx - 1, # wp_idx是到达点的前一个点
+            "total": len(self.waypoint) - 1,
+        }))
+        if self.wp_idx >= len(self.waypoint):
+            if self.land:
+                self.set_mode_service(0, "LAND")
+            return
+        self.publish_cur_wp()
+        self.wp_idx += 1
+        
+    @Node.ros("/mavros/local_position/odom", Odometry)  
     def odom_cb(self, msg):
         with self.odom_lock:
             self.odom = msg
-    
-    def rel_alt_cb(self, msg):
-        self.rel_alt = msg.data
-    
-class Control(Node):
-    def __init__(self):
-        super().__init__()
-        rospy.loginfo("wait for mavros service...")
-        rospy.wait_for_service('/mavros/cmd/arming')
-        rospy.wait_for_service('/mavros/set_mode')
-        rospy.wait_for_service('/mavros/cmd/takeoff')
-        rospy.loginfo("done")
-        self.takeoff_srv = rospy.ServiceProxy('/mavros/cmd/takeoff', CommandTOL)
-        self.arm_service = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
-        self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
-        self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         
-        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
-        
-        self.wp_ctrl = ROSWpControl()
-        self.rel_alt = 0
-        self.sys_status = None
-        self.state = None
-        self.last_send = -1
-        self.following = False # 跟随发布的命令 
-    
     @Node.ros("/cmd_vel2", Twist)
     def cmd_vel_cb2(self, cmd_vel_msg):
         if not self.following:
@@ -185,7 +198,7 @@ class Control(Node):
     
     @Node.ros("/cmd_vel", Twist)
     def cmd_vel_cb(self, cmd_vel_msg):
-        odom_msg = self.wp_ctrl.get_cur_odom()
+        odom_msg = self.get_cur_odom()
         if odom_msg is None:
             return
 
@@ -225,7 +238,17 @@ class Control(Node):
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
-    
+        if self.taking_off and \
+            math.fabs(self.rel_alt - self.takeoff_alt) < TAKEOFF_THRESHOLD:
+            self.ws_pub.publish(json.dumps({
+                "type": "event",
+                "event": "takeoff"
+            }))
+            self.taking_off = False
+            if self.send_wp:
+                self.wp_done_cb()
+                self.send_wp = False
+            
     @Node.ros("/mavros/sys_status", SysStatus)
     def systatus_cb(self, data):
         self.sys_status = data
@@ -245,10 +268,14 @@ class Control(Node):
                 return
             self.following = True
             self.last_send = cur_time
-            self.wp_ctrl.ws_pub.publish(json.dumps(data))
+            self.ws_pub.publish(json.dumps(data))
         except json.JSONDecodeError:
             pass
     
+    @Node.ros("/mavros/state", State)
+    def mode_cb(self, data):
+        self.arm = data.armed
+        
     @Node.ros("/planning/pos_cmd", PositionCommand)
     def cmd_cb(self, msg):
         if self.following:
@@ -289,7 +316,7 @@ class Control(Node):
     @Node.route("/pos_vel", "POST")
     def set_pos_vel(self, pos, vel):
         v = vel
-        diff_x, diff_y, diff_z = self.wp_ctrl.gps_target2enu_diff(pos)
+        diff_x, diff_y, diff_z = self.gps_target2enu_diff(pos)
         distance = math.sqrt((diff_x * diff_x) + (diff_y * diff_y))
         if distance < 0.5:
             distance = 0
@@ -328,38 +355,42 @@ class Control(Node):
         # 发布
         self.setpoint_pub.publish(target)
         return SUCCESS_RESPONSE()
-        
     
     @Node.route("/stop_follow", "POST")
     def stop_follow(self):
         self.last_send = time.time() + STOP_SPAN
         self.following = False
-        self.wp_ctrl.publish_cur_wp()
+        self.publish_cur_wp()
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_waypoint", "POST")
-    def set_waypoint(self, waypoint, speed=None, land=False):
-        self.wp_ctrl.set_waypoint(waypoint, speed, land)
+    def route_set_waypoint(self, waypoint, speed=None, land=False, rtl=False):
+        rospy.loginfo(f"receive wp: {json.dumps(waypoint)}")
+        self.set_waypoint(waypoint, speed, land=land, rtl=rtl)
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_mode", "POST")
-    def set_mode(self, mode):
+    def route_set_mode(self, mode):
         self.set_mode_service(0, mode)
         return SUCCESS_RESPONSE()
 
     @Node.route("/land", "POST")
-    def land(self):
-        self.set_mode_service(0, 'LAND')
+    def route_land(self, waypoint=None, speed=None):
+        if waypoint is None:
+            self.set_mode_service(0, 'LAND')
+        else:
+            self.set_waypoint(waypoint, speed, land=True)
         return SUCCESS_RESPONSE()
         
     @Node.route("/return", "POST")
-    def _return(self, waypoint, speed=None, land=True):
-        self.wp_ctrl.set_waypoint(waypoints, speed, land)
+    def route_return(self, waypoint=None, speed=None):
+        if waypoint is None:
+            waypoint = []
+        self.set_waypoint(waypoint, speed, rtl=True)
         return SUCCESS_RESPONSE()
     
-    
     @Node.route("/takeoff", "POST")
-    def takeoff(self, alt):
+    def route_takeoff(self, alt):
         self.set_mode_service(0, 'GUIDED')
         
         # 解锁
@@ -381,13 +412,13 @@ class Control(Node):
             altitude=alt  # Target altitude in meters
         )
         rospy.loginfo("Takeoff command finished.")
-        self.wp_ctrl.set_home(alt)
+        self.set_home(alt)
         return SUCCESS_RESPONSE()
     
     @Node.route("/get_gps", "GET")
     def get_gps(self):
         return {
-            "msg": [self.wp_ctrl.lon, self.wp_ctrl.lat, self.rel_alt],
+            "msg": [self.lon, self.lat, self.rel_alt],
             "status": "succecss"
         }
     

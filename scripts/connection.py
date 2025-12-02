@@ -48,7 +48,6 @@ class RequestHandler:
             body = await request.json()
             request_data.update(body)
         except Exception as e:
-            rospy.logerr(e)
             pass  # 没有body或者不是json格式
             
         response = self.service(request=json.dumps(request_data))
