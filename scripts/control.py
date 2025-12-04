@@ -58,7 +58,7 @@ class Control(Node):
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=1)
         self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=1)
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
-        self.target_pub = rospy.Publisher('/UAV0/perception/obj_location/obj_lla', PointStamped, queue_size=1)
+        self.target_pub = rospy.Publisher('/UAV0/perception/object_location/obj_lla', PointStamped, queue_size=1)
         
         self.wp_idx = 0
         self.send_wp = False
