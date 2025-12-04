@@ -5,11 +5,11 @@ from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong
 from mavros_msgs.msg import PositionTarget, SysStatus, StatusText
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Empty
-from geometry_msgs.msg import PoseStamped, Vector3, Twist
+from geometry_msgs.msg import PoseStamped, Vector3, Twist, PointStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Float64, String
-
+from rsos_msgs.msg import PointObj
 import json
 import threading
 from pyproj import CRS, Transformer
@@ -37,9 +37,7 @@ class Control(Node):
         self.arm_service = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
         self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
-        
-        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
-        
+         
         self.rel_alt = 0
         self.sys_status = None
         self.state = None
@@ -59,10 +57,54 @@ class Control(Node):
         
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=1)
         self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=1)
+        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
+        self.target_pub = rospy.Publisher('/UAV0/perception/obj_location/obj_lla', PointStamped, queue_size=1)
         
         self.wp_idx = 0
         self.send_wp = False
         self.taking_off = False
+    
+    def enu2gps(self, enu):
+        """
+        已知ENU坐标系下(odom)机体位置，求目标点GPS坐标
+        """
+        lng = self.lon
+        lat = self.lat
+        
+        # WGS84地理坐标系
+        crs_wgs84 = CRS.from_epsg(4326)
+
+        # home点的UTM投影
+        crs_utm = CRS.from_proj4(
+            f"+proj=utm +zone={(int((lng + 180) / 6) + 1)} +datum=WGS84 +units=m +no_defs"
+        )
+
+        # 创建转换器
+        transformer = Transformer.from_crs(crs_wgs84, crs_utm)
+        # home点的UTM坐标
+        home_x, home_y = transformer.transform(lat, lng)
+        
+    
+        odom = self.get_cur_odom()
+        # enu坐标系下目标点相对飞机的偏移
+        enu_diff = [
+            enu[0] - odom.pose.pose.position.x,
+            enu[1] - odom.pose.pose.position.y,
+            enu[2] - odom.pose.pose.position.z
+        ] 
+        
+        # 目标点的UTM坐标
+        target_x = home_x + enu_diff[0]
+        target_y = home_y + enu_diff[1]
+
+        # 逆变换，UTM->WGS84
+        transformer_inv = Transformer.from_crs(crs_utm, crs_wgs84)
+        target_lat, target_lng = transformer_inv.transform(target_x, target_y)
+
+        # 高度
+        target_alt = self.rel_alt + enu_diff[2]
+
+        return [target_lng, target_lat, target_alt]
     
     def gps_target2enu_diff(self, gps):
         """ 获取enu坐标系下相对机体位置的偏移
@@ -190,12 +232,27 @@ class Control(Node):
         with self.odom_lock:
             self.odom = msg
         
-    @Node.ros("/cmd_vel2", Twist)
-    def cmd_vel_cb2(self, cmd_vel_msg):
+    @Node.ros("/UAV0/perception/obj_location/geopoint", PointObj)
+    def target_cb(self, msg):
+        if self.lat is None or self.lon is None or self.odom is None:
+            return
+        goal = PointStamped()
+        goal.header.frame_id = "map"
+        goal.header.stamp = rospy.Time.now()
+        lon, lat, alt = self.enu2gps([msg.pos.x, msg.pos.y, msg.pos.z])
+        goal.point.x = lon
+        goal.point.y = lat
+        goal.point.z = alt
+        self.target_pub.publish(goal)
+        
         if not self.following:
             return
-        return self.cmd_vel_cb(cmd_vel_msg)
-    
+        cmd_vel_msg = Twist()
+        cmd_vel_msg.linear.x = msg.velocity.x
+        cmd_vel_msg.linear.y = msg.velocity.y
+        cmd_vel_msg.linear.z = msg.velocity.z
+        self.cmd_vel_cb(cmd_vel_msg)
+        
     @Node.ros("/cmd_vel", Twist)
     def cmd_vel_cb(self, cmd_vel_msg):
         odom_msg = self.get_cur_odom()
