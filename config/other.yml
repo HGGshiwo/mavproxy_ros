@@ -3,3 +3,5 @@ node_cfg:
     topic: /UAV0/sensor/video11_camera/enable_send  
   - title: 检测
     topic: /UAV0/perception/yolo_detection/enable_detection
+  - title: 定位跟随
+    topic: /UAV0/perception/object_location/object_location_node/enable_send
