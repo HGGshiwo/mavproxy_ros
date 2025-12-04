@@ -22,6 +22,7 @@ from mavros_msgs.msg import StatusText
 from std_msgs.msg import Empty
 import time
 from fastapi.middleware.cors import CORSMiddleware
+import datetime
 
 loop = None
 def run_in_loop(task):
@@ -56,7 +57,7 @@ class RequestHandler:
 class WSManager:
     def __init__(self):
         self.ws_list = []
-        self.data = {"type": "state", "connected": False, "record": False}
+        self.data = {"type": "state", "connected": False, "record": False, "event": []}
         self.lock = threading.Lock()
         
     async def add(self, ws):
@@ -73,6 +74,11 @@ class WSManager:
         with self.lock:
             if data_type == "state":
                 self.data.update(data)
+            elif data_type == "event":
+                now = datetime.datetime.now()
+                # 格式化为字符串
+                now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+                self.data["event"].append({"time": now_str, **data})
             ws_list_copy = self.ws_list.copy()  # 复制列表避免长时间持有锁
         
         # 为每个 WebSocket 创建发送任务

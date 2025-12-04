@@ -236,6 +236,16 @@ class Control(Node):
     def target_cb(self, msg):
         if self.lat is None or self.lon is None or self.odom is None:
             return
+        if msg.score < 0:
+            rospy.loginfo(f"target score: {msg.score}, ignore...")
+            return
+        cur_time = time.time()
+        if cur_time - self.last_send < DETECT_SPAN:
+            rospy.loginfo(f"stop follow span, remain: {DETECT_SPAN - self.last_send}s")
+            return
+        self.following = True
+        self.last_send = cur_time
+        
         goal = PointStamped()
         goal.header.frame_id = "map"
         goal.header.stamp = rospy.Time.now()
@@ -245,8 +255,6 @@ class Control(Node):
         goal.point.z = alt
         self.target_pub.publish(goal)
         
-        if not self.following:
-            return
         cmd_vel_msg = Twist()
         cmd_vel_msg.linear.x = msg.velocity.x
         cmd_vel_msg.linear.y = msg.velocity.y
@@ -317,15 +325,7 @@ class Control(Node):
     @Node.ros("/mavros/ws", String)
     def detect_cb(self, data):
         try:
-            data = json.loads(data.data)
-            if data.get("event", None) != "detect":
-                return
-            cur_time = time.time()
-            if cur_time - self.last_send < DETECT_SPAN:
-                return
-            self.following = True
-            self.last_send = cur_time
-            self.ws_pub.publish(json.dumps(data))
+            self.ws_pub.publish(data)
         except json.JSONDecodeError:
             pass
     
