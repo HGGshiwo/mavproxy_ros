@@ -232,7 +232,7 @@ class Control(Node):
         with self.odom_lock:
             self.odom = msg
         
-    @Node.ros("/UAV0/perception/obj_location/geopoint", PointObj)
+    @Node.ros("/UAV0/perception/object_location/location_vel", PointObj)
     def target_cb(self, msg):
         if self.lat is None or self.lon is None or self.odom is None:
             return
