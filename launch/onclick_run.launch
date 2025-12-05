@@ -1,4 +1,5 @@
 <launch>
+    <arg name="debug" default="false" />
     <group ns="mavproxy">
         <node pkg="mavproxy_ros" type="connection.py" name="connection" output="screen"/>
         <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True" />
@@ -10,5 +11,6 @@
         <node pkg="mavproxy_ros" type="other.py" name="other" output="screen" clear_params="true">
             <rosparam command="load" file="$(find mavproxy_ros)/config/other.yml"/>
         </node>
+        <node pkg="mavproxy_ros" type="dummy_service.py" name="dummy" output="screen" if="$(arg debug)" />
     </group>
 </launch>
