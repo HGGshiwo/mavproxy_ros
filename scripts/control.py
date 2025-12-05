@@ -338,6 +338,8 @@ class Control(Node):
         if self.following:
             return
         p_des_odom = np.array([msg.position.x, msg.position.y, msg.position.z])
+        v_des_odom = np.array([msg.velocity.x, msg.velocity.y, msg.velocity.z])
+        a_des_odom = np.array([msg.acceleration.x, msg.acceleration.y, msg.acceleration.z])
         yaw_des = msg.yaw #- np.pi / 2
 
         # 构造MAVLink消息
@@ -350,19 +352,19 @@ class Control(Node):
         
         # 类型掩码：使用位置+速度
         target.type_mask = (
-            PositionTarget.IGNORE_AFX |      # 忽略加速度x
-            PositionTarget.IGNORE_AFY |      # 忽略加速度y
-            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
-            PositionTarget.IGNORE_VX |
-            PositionTarget.IGNORE_VY |
-            PositionTarget.IGNORE_VZ |
+            # PositionTarget.IGNORE_AFX |      # 忽略加速度x
+            # PositionTarget.IGNORE_AFY |      # 忽略加速度y
+            # PositionTarget.IGNORE_AFZ |      # 忽略加速度z
+            # PositionTarget.IGNORE_VX |
+            # PositionTarget.IGNORE_VY |
+            # PositionTarget.IGNORE_VZ |
             PositionTarget.IGNORE_YAW_RATE   # 忽略偏航速率
         )
         
         # 设置值
         # target.position = Vector3(ned_p[0], ned_p[1], ned_p[2])
-        # target.velocity = Vector3(ned_v[0], ned_v[1], ned_v[2])
-        # target.acceleration_or_force = Vector3(ned_a[0], ned_a[1], ned_a[2])
+        target.velocity = Vector3(v_des_odom[0], v_des_odom[1], v_des_odom[2])
+        target.acceleration_or_force = Vector3(a_des_odom[0], a_des_odom[1], a_des_odom[2])
         target.position = Vector3(p_des_odom[0], p_des_odom[1], p_des_odom[2])
         target.yaw = yaw_des
         target.yaw_rate = 0
