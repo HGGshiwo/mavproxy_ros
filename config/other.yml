@@ -8,6 +8,6 @@ node_cfg:
   - title: 定位跟随
     topic: /UAV0/perception/object_location/object_location_node/enable_send
     type: boolean
-  - title: 重力
-    topic: /gazebo/gravity_z
+  - title: 跟随速度
+    topic: /UAV0/perception/object_location/object_location_node/velocity/max_move_speed
     type: number
