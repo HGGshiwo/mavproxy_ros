@@ -206,6 +206,10 @@ class Control(Node):
                 return
         return odom_msg
     
+    def set_following(self, data):
+        self.following = data
+        self.ws_pub.publish(json.dumps({"type": "state", "follow": data}))
+    
     @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
@@ -243,7 +247,7 @@ class Control(Node):
         if cur_time - self.last_send < DETECT_SPAN:
             rospy.loginfo(f"stop follow span, remain: {DETECT_SPAN - self.last_send}s")
             return
-        self.following = True
+        self.set_following(True)
         self.last_send = cur_time
         
         goal = PointStamped()
@@ -259,6 +263,12 @@ class Control(Node):
         cmd_vel_msg.linear.x = msg.velocity.x
         cmd_vel_msg.linear.y = msg.velocity.y
         cmd_vel_msg.linear.z = msg.velocity.z
+        self.ws_pub.publish(json.dumps({
+            "type": "state",
+            "follow x": msg.velocity.x,
+            "follow y": msg.velocity.y, 
+            "follow z": msg.velocity.z
+        }))
         self.cmd_vel_cb(cmd_vel_msg)
         
     @Node.ros("/cmd_vel", Twist)
@@ -418,7 +428,7 @@ class Control(Node):
     @Node.route("/stop_follow", "POST")
     def stop_follow(self):
         self.last_send = time.time() + STOP_SPAN
-        self.following = False
+        self.set_following(False)
         self.publish_cur_wp()
         return SUCCESS_RESPONSE()
     

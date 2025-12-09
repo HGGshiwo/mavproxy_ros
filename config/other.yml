@@ -1,7 +1,13 @@
 node_cfg: 
   - title: 相机
-    topic: /UAV0/sensor/video11_camera/enable_send  
+    topic: /UAV0/sensor/video11_camera/enable_send
+    type: boolean
   - title: 检测
     topic: /UAV0/perception/yolo_detection/enable_detection
+    type: boolean
   - title: 定位跟随
     topic: /UAV0/perception/object_location/object_location_node/enable_send
+    type: boolean
+  - title: 重力
+    topic: /gazebo/gravity_z
+    type: number
