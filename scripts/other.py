@@ -7,6 +7,7 @@ from base.utils import ERROR_RESPONSE
 from rsos_msgs.srv import StartBagRecord
 from std_srvs.srv import Trigger
 import json
+from rsos_msgs.srv import SetGimbalAngle, SetGimbalAngleResponse
 
 class Other(Node):
     def __init__(self):
@@ -44,6 +45,25 @@ class Other(Node):
             return SUCCESS_RESPONSE(rospy.get_param(name))
         except KeyError as e:
             return ERROR_RESPONSE(str(e))
+    
+    @Node.route("/get_gimbal", "GET")
+    def get_gimbal(self):
+        try:
+            mode = rospy.get_param("/UAV0/sensor/serial_gimbal/angle_mode")
+            angle = rospy.get_param("/UAV0/sensor/serial_gimbal/gimbal_angle")
+            return SUCCESS_RESPONSE({"mode": mode, "angle": angle})
+        except Exception as e:
+            return ERROR_RESPONSE(str(e))
+    
+    @Node.route("/set_gimbal", "POST")
+    def set_gimbal(self, mode, angle):
+        service_name = "/UAV0/sensor/serial_gimbal/set_gimbal_angle"
+        rospy.wait_for_service(service_name)
+        srv = rospy.ServiceProxy(service_name, SetGimbalAngle)
+        res = srv(mode=mode, angle=angle)
+        if not res.success:
+            return ERROR_RESPONSE(res.message)
+        return SUCCESS_RESPONSE(res.message)
     
 if __name__ == '__main__':
     node = Other()
