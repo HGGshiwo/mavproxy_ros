@@ -11,3 +11,6 @@ node_cfg:
   - title: 跟随速度
     topic: /UAV0/perception/object_location/object_location_node/velocity/max_move_speed
     type: number
+  - title: 精准降落
+    topic: /mavproxy/pland/param/PLND_ENABLED
+    type: number

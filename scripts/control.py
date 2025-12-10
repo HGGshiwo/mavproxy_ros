@@ -445,7 +445,7 @@ class Control(Node):
 
     @Node.route("/land", "POST")
     def route_land(self, waypoint=None, speed=None):
-        if waypoint is None:
+        if waypoint is None or len(waypoint) == 0:
             self.set_mode_service(0, 'LAND')
         else:
             self.set_waypoint(waypoint, speed, land=True)
