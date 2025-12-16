@@ -20,11 +20,22 @@ from base.node import Node
 import time
 import math
 from mavros_msgs.msg import State
+from visualization_msgs.msg import Marker
+from enum import Enum
 
 DETECT_SPAN = 1
 STOP_SPAN = 10  
 TAKEOFF_THRESHOLD = 1
+
+class CTRL_STATE(Enum):
+    INIT = "等待odom"
+    GROUND = "停在地面"
+    TAKING_OFF = "正在起飞"
+    WP = "航点模式"
+    FOLLOW = "跟随模式"
+    LANDING = "正在降落"
     
+
 class Control(Node):
     def __init__(self):
         super().__init__()
@@ -32,7 +43,7 @@ class Control(Node):
         rospy.wait_for_service('/mavros/cmd/arming')
         rospy.wait_for_service('/mavros/set_mode')
         rospy.wait_for_service('/mavros/cmd/takeoff')
-        rospy.loginfo("done")
+        rospy.loginfo("control done")
         self.takeoff_srv = rospy.ServiceProxy('/mavros/cmd/takeoff', CommandTOL)
         self.arm_service = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
         self.set_mode_service = rospy.ServiceProxy('/mavros/set_mode', SetMode)
@@ -42,7 +53,7 @@ class Control(Node):
         self.sys_status = None
         self.state = None
         self.last_send = -1
-        self.following = False # 跟随发布的命令
+        
         self.arm = False
         self.odom = None
         self.lat = None
@@ -62,7 +73,37 @@ class Control(Node):
         
         self.wp_idx = 0
         self.send_wp = False
-        self.taking_off = False
+        self._drone_state = CTRL_STATE.INIT
+    
+    
+    @property    
+    def drone_state(self):
+        return self._drone_state
+    
+    @drone_state.setter
+    def drone_state(self, state):
+        if state == self._drone_state:
+            return
+        if state == CTRL_STATE.TAKING_OFF and self._drone_state != CTRL_STATE.GROUND:
+            return # 只允许在ground条件下起飞
+        
+        if self._drone_state == CTRL_STATE.TAKING_OFF:
+            # 从takeoff状态切换到别的状态
+            self.ws_pub.publish(json.dumps({
+                "type": "event",
+                "event": "takeoff"
+            }))
+            if self.send_wp and state == CTRL_STATE.WP:
+                self.wp_done_cb()
+                self.send_wp = False
+                
+        self.ws_pub.publish(json.dumps({"type": "state", "state": state.value}))
+        self._drone_state = state
+    
+    def odom_ok(self):
+        if self.lat is None or self.lon is None or self.odom is None:
+            False
+        return True
     
     def enu2gps(self, enu):
         """
@@ -156,19 +197,19 @@ class Control(Node):
         self.land = land or rtl
         self.speed = speed
         if rtl:
-            if self.arm == False:
+            if self.drone_state == CTRL_STATE.GROUND:
                 self.set_home(waypoint[0][-1])
             if self.takeoff_lon is None or self.takeoff_lat is None:
                 raise ValueError("No takeoff position find")
             self.waypoint.append([self.takeoff_lon, self.takeoff_lat, self.takeoff_alt])
         
         self.wp_idx = 1 # 忽略第一个点
-        if self.arm == True:    
-            self.wp_done_cb()
-        else:
+        if self.drone_state == CTRL_STATE.GROUND:   
             self.send_wp = True
             alt = waypoint[0][-1]
-            self.route_takeoff(alt)
+            self.route_takeoff(alt) 
+        else:
+            self.wp_done_cb()
         
         out = []
         for i, wp in enumerate(self.waypoint):
@@ -185,7 +226,7 @@ class Control(Node):
         self.takeoff_lat = self.lat
         self.takeoff_lon = self.lon
         self.takeoff_alt = alt
-        self.taking_off = True
+        self.drone_state = CTRL_STATE.TAKING_OFF
     
     def publish_cur_wp(self):
         if self.wp_idx >= len(self.waypoint):
@@ -205,10 +246,6 @@ class Control(Node):
                 print(f"error: odom and PositionCommand time diff:{time_diff}")
                 return
         return odom_msg
-    
-    def set_following(self, data):
-        self.following = data
-        self.ws_pub.publish(json.dumps({"type": "state", "follow": data}))
     
     @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
     def gps_cb(self, data: NavSatFix):
@@ -233,12 +270,14 @@ class Control(Node):
         
     @Node.ros("/mavros/local_position/odom", Odometry)  
     def odom_cb(self, msg):
+        if self.drone_state == CTRL_STATE.INIT:
+            self.drone_state = CTRL_STATE.GROUND
         with self.odom_lock:
             self.odom = msg
         
     @Node.ros("/UAV0/perception/object_location/location_vel", PointObj)
     def target_cb(self, msg):
-        if self.lat is None or self.lon is None or self.odom is None:
+        if not self.odom_ok():
             return
         if msg.score < 0:
             rospy.loginfo(f"target score: {msg.score}, ignore...")
@@ -247,7 +286,7 @@ class Control(Node):
         if cur_time - self.last_send < DETECT_SPAN:
             rospy.loginfo(f"stop follow span, remain: {DETECT_SPAN - self.last_send}s")
             return
-        self.set_following(True)
+        self.drone_state = CTRL_STATE.FOLLOW
         self.last_send = cur_time
         
         goal = PointStamped()
@@ -313,16 +352,11 @@ class Control(Node):
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
-        if self.taking_off and \
+        if self.drone_state == CTRL_STATE.TAKING_OFF and \
             math.fabs(self.rel_alt - self.takeoff_alt) < TAKEOFF_THRESHOLD:
-            self.ws_pub.publish(json.dumps({
-                "type": "event",
-                "event": "takeoff"
-            }))
-            self.taking_off = False
-            if self.send_wp:
-                self.wp_done_cb()
-                self.send_wp = False
+            self.drone_state = CTRL_STATE.WP
+        elif self.drone_state == CTRL_STATE.LANDING and math.fabs(self.rel_alt - 0) < TAKEOFF_THRESHOLD:
+            self.drone_state = CTRL_STATE.GROUND
             
     @Node.ros("/mavros/sys_status", SysStatus)
     def systatus_cb(self, data):
@@ -342,10 +376,29 @@ class Control(Node):
     @Node.ros("/mavros/state", State)
     def mode_cb(self, data):
         self.arm = data.armed
+        if data.mode in ["RTL", "LAND"]:
+            self.drone_state = CTRL_STATE.LANDING
+    
+    @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
+    def optimal_cb(self, msg):
+        if not self.odom_ok():
+            return
+        xyz_list = []
+        for pt in msg.points:
+            xyz_list.append([pt.x, pt.y, pt.z])
+        wp_list = []
+        for xyz in xyz_list:
+            gps = self.enu2gps(xyz)
+            wp_list.append(gps)
+        self.ws_pub.publish(json.dumps({
+            "type": "state",
+            "waypoint": wp_list
+        }))
+        
         
     @Node.ros("/planning/pos_cmd", PositionCommand)
     def cmd_cb(self, msg):
-        if self.following:
+        if self.drone_state != CTRL_STATE.WP:
             return
         p_des_odom = np.array([msg.position.x, msg.position.y, msg.position.z])
         v_des_odom = np.array([msg.velocity.x, msg.velocity.y, msg.velocity.z])
@@ -428,7 +481,7 @@ class Control(Node):
     @Node.route("/stop_follow", "POST")
     def stop_follow(self):
         self.last_send = time.time() + STOP_SPAN
-        self.set_following(False)
+        self.drone_state = CTRL_STATE.WP
         self.publish_cur_wp()
         return SUCCESS_RESPONSE()
     
@@ -447,6 +500,7 @@ class Control(Node):
     def route_land(self, waypoint=None, speed=None):
         if waypoint is None or len(waypoint) == 0:
             self.set_mode_service(0, 'LAND')
+            self.drone_state = CTRL_STATE.LANDING
         else:
             self.set_waypoint(waypoint, speed, land=True)
         return SUCCESS_RESPONSE()

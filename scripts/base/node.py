@@ -108,6 +108,7 @@ class Node:
         def wrapper(func):
             func.topic = topic
             func.topic_type = topic_type
+            func.last = time.time()
             return func
         return wrapper
     
