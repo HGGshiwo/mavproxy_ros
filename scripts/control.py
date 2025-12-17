@@ -24,7 +24,7 @@ from visualization_msgs.msg import Marker
 from enum import Enum
 
 DETECT_SPAN = 1
-STOP_SPAN = 10  
+STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 1
 
 class CTRL_STATE(Enum):
@@ -281,24 +281,30 @@ class Control(Node):
             return
         
         if msg.score < 0:
-            rospy.loginfo(f"target score: {msg.score}, ignore...")
-            return
+            if self.drone_state != CTRL_STATE.FOLLOW:
+                rospy.loginfo(f"target score: {msg.score}, ignore...")
+                return
+            else:
+                msg.velocity.x = 0
+                msg.velocity.y = 0
+                msg.velocity.z = 0
         cur_time = time.time()
         if cur_time - self.last_send < DETECT_SPAN:
             rospy.loginfo(f"stop follow span, remain: {DETECT_SPAN - self.last_send}s")
             return
         self.drone_state = CTRL_STATE.FOLLOW
-        self.last_send = cur_time
+        # self.last_send = cur_time
         
-        goal = PointStamped()
-        goal.header.frame_id = "map"
-        goal.header.stamp = rospy.Time.now()
-        lon, lat, alt = self.enu2gps([msg.pos.x, msg.pos.y, msg.pos.z])
-        goal.point.x = lon
-        goal.point.y = lat
-        goal.point.z = alt
-        self.target_pub.publish(goal)
-        
+        if msg.score > 0:
+            goal = PointStamped()
+            goal.header.frame_id = "map"
+            goal.header.stamp = rospy.Time.now()
+            lon, lat, alt = self.enu2gps([msg.pos.x, msg.pos.y, msg.pos.z])
+            goal.point.x = lon
+            goal.point.y = lat
+            goal.point.z = alt
+            self.target_pub.publish(goal)
+            
         cmd_vel_msg = Twist()
         cmd_vel_msg.linear.x = msg.velocity.x
         cmd_vel_msg.linear.y = msg.velocity.y
@@ -483,6 +489,8 @@ class Control(Node):
     def stop_follow(self):
         self.last_send = time.time() + STOP_SPAN
         self.drone_state = CTRL_STATE.WP
+        rospy.set_param("/UAV0/perception/yolo_detection/enable_detection", False)
+        rospy.set_param("/UAV0/perception/object_location/object_location_node/enable_send", False)
         self.publish_cur_wp()
         return SUCCESS_RESPONSE()
     
