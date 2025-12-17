@@ -102,7 +102,7 @@ class Control(Node):
     
     def odom_ok(self):
         if self.lat is None or self.lon is None or self.odom is None:
-            False
+            return False
         return True
     
     def enu2gps(self, enu):
@@ -279,6 +279,7 @@ class Control(Node):
     def target_cb(self, msg):
         if not self.odom_ok():
             return
+        
         if msg.score < 0:
             rospy.loginfo(f"target score: {msg.score}, ignore...")
             return
@@ -376,7 +377,7 @@ class Control(Node):
     @Node.ros("/mavros/state", State)
     def mode_cb(self, data):
         self.arm = data.armed
-        if data.mode in ["RTL", "LAND"]:
+        if data.mode in ["RTL", "LAND"] and self.drone_state != CTRL_STATE.GROUND:
             self.drone_state = CTRL_STATE.LANDING
     
     @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
