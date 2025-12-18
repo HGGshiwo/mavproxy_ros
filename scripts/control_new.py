@@ -22,20 +22,72 @@ import math
 from mavros_msgs.msg import State
 from visualization_msgs.msg import Marker
 from enum import Enum
+from base.ctrl_node import CtrlNode
 
 DETECT_SPAN = 1
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 1
+STRICT_HEIGHT = True
 
-class CTRL_STATE(Enum):
-    INIT = "等待odom"
-    GROUND = "停在地面"
+class NodeType(Enum):
+    INIT = "初始化"
+    GROUND = "地面"
     TAKING_OFF = "正在起飞"
+    TAKING_OFF2 = "航点中起飞"
+    HOVER = "悬停"
+    LIFTING = "调整高度"
     WP = "航点模式"
     FOLLOW = "跟随模式"
     LANDING = "正在降落"
-    
 
+class EventType(Enum):
+    ODOM_OK = 1
+    SET_TAKEOFF = 2
+    SET_WP = 3
+    TAKEOFF_DONE = 4
+    
+class InitNode(CtrlNode):
+    def __init__(self):
+        super().__init__(NodeType.INIT)
+    
+    @CtrlNode.on(EventType.ODOM_OK)
+    def odom_ok_cb(self):
+        self.step(NodeType.GROUND)
+
+class GroundNode(CtrlNode):
+    def __init__(self):
+        super().__init__(NodeType.GROUND)
+        
+    @CtrlNode.on(EventType.SET_TAKEOFF)
+    def takeoff_cb(self, alt):
+        self.context.takeoff(alt)
+        self.step(NodeType.TAKING_OFF)
+        
+    @CtrlNode.on(EventType.SET_WP)
+    def set_wp_cb(self, waypoint, speed, land, rtl):
+        alt = waypoint[0][-1]
+        self.context.takeoff(alt)
+        self.context.land = land
+        self.context.rtl = rtl
+        self.step(NodeType.TAKING_OFF2)
+    
+class TakeoffNode(CtrlNode):
+    def __init__(self):
+        super().__init__(NodeType.TAKING_OFF)
+        
+    @CtrlNode.on(EventType.TAKEOFF_DONE)
+    def takeoff_done_cb(self):
+        self.step(NodeType.HOVER)
+    
+class Takeoff2Node(CtrlNode):
+    def __init__(self):
+        super().__init__(NodeType.TAKING_OFF2)
+    
+    @CtrlNode.on(EventType.TAKEOFF_DONE)
+    def takeoff_done_cb(self):
+        self.step(NodeType.WP)
+    
+        
 class Control(Node):
     def __init__(self):
         super().__init__()
@@ -75,7 +127,32 @@ class Control(Node):
         self.send_wp = False
         self._drone_state = CTRL_STATE.INIT
     
-    
+    def takeoff(self, alt):
+        self.set_mode_service(0, 'GUIDED')
+        
+        # 解锁
+        out = self.prearm()["msg"]
+        if out.get("arm", False) == False:
+            raise ValueError(out["reason"])
+        res = self.arm_service(True)
+        if res.result == 1:
+            raise ValueError("can not arm")
+        rospy.loginfo("Vehicle armed")
+        
+        # 持续发布目标点
+        rospy.loginfo("Taking off...")
+        response = self.takeoff_srv(
+            min_pitch=0,
+            yaw=0,
+            latitude=0,
+            longitude=0,
+            altitude=alt  # Target altitude in meters
+        )
+        rospy.loginfo("Takeoff command finished.")
+        self.takeoff_lat = self.lat
+        self.takeoff_lon = self.lon
+        self.takeoff_alt = alt
+        
     @property    
     def drone_state(self):
         return self._drone_state
@@ -231,7 +308,51 @@ class Control(Node):
     def publish_cur_wp(self):
         if self.wp_idx >= len(self.waypoint):
             return
-        self.wp_pub.publish(self.gps_target2goal(self.waypoint[self.wp_idx]))
+        cur_wp = self.waypoint[self.wp_idx]
+        pub = lambda: self.wp_pub.publish(self.gps_target2goal(cur_wp))
+        height_ok = lambda: math.fabs(self.rel_alt - cur_wp[2]) < 0.1
+        
+        if not STRICT_HEIGHT or height_ok():
+            pub()
+            rospy.logerr("height ok")
+        else:
+            def pub_cur():
+                rate = rospy.Rate(0.1)
+                while not rospy.is_shutdown():
+                    rospy.logerr(f"height {self.rel_alt} {cur_wp[2]}")
+                    if height_ok():
+                        pub()
+                        break
+                    else:
+                        rate.sleep()
+                        # 构造MAVLink消息
+                        target = PositionTarget()
+                        target.header.stamp = rospy.Time.now()
+                        target.header.frame_id = "local_ned"
+                        
+                        # 坐标系选择
+                        target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+                        
+                        # 类型掩码：使用位置+速度
+                        target.type_mask = (
+                            PositionTarget.IGNORE_PX |      
+                            PositionTarget.IGNORE_PY |  
+                            PositionTarget.IGNORE_AFX |      # 忽略加速度x
+                            PositionTarget.IGNORE_AFY |      # 忽略加速度y
+                            PositionTarget.IGNORE_AFZ |      # 忽略加速度z
+                            PositionTarget.IGNORE_VX |
+                            PositionTarget.IGNORE_VY |
+                            PositionTarget.IGNORE_VZ |
+                            PositionTarget.IGNORE_YAW_RATE |  # 忽略偏航速率
+                            PositionTarget.IGNORE_YAW
+                        )
+                        
+                        # 设置值
+                        # target.position = Vector3(ned_p[0], ned_p[1], ned_p[2])
+                        target.position = Vector3(0, 0, self.rel_alt)
+                        # 发布
+                        self.setpoint_pub.publish(target)
+            threading.Thread(target=pub_cur, daemon=True).start()
     
     def get_cur_odom(self, t_cmd=None):
         with self.odom_lock:
