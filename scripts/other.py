@@ -12,7 +12,7 @@ from rsos_msgs.srv import SetGimbalAngle, SetGimbalAngleResponse
 class Other(Node):
     def __init__(self):
         super().__init__()
-        self.ws_pub = rospy.Publisher("ws", String, queue_size=1)
+        self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
         
     @Node.route("/start_record", "POST")
     def start_record(self, bag_name):

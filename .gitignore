@@ -2,3 +2,7 @@
 **/__pycache__
 *.jpg
 .vscode
+eeprom.bin
+logs/*.BIN
+terrain/*
+logs/LASTLOG.TXT
