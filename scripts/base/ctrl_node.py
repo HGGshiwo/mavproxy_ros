@@ -23,6 +23,7 @@ class CtrlNode:
     
     def _register(self, event_type, func):
         func_new = lambda _, **kwargs: func(**kwargs) # 忽略self
+        func_new.__name__ = func.__name__
         handler = self.event_handler.get(event_type, [])
         handler.append(func_new)
         self.event_handler[event_type] =  handler
@@ -91,5 +92,6 @@ class Runner:
             handlers = self.node.event_handler.get(event_type, [])
             for h in handlers:
                 with self.lock:
+                    # print(self.node.type, h.__name__, kwargs)
                     h(self.node, **kwargs)
-            
+                    

@@ -23,6 +23,8 @@ from std_msgs.msg import Empty
 import time
 from fastapi.middleware.cors import CORSMiddleware
 import datetime
+import logging
+from starlette.middleware.base import BaseHTTPMiddleware
 
 loop = None
 def run_in_loop(task):
@@ -72,6 +74,7 @@ class WSManager:
     
     def publish(self, data, data_type="state"):
         with self.lock:
+            data["type"] = data_type
             if data_type == "state":
                 self.data.update(data)
             elif data_type == "event":
@@ -94,7 +97,18 @@ class WSManager:
         except Exception as e:
             print(f"WebSocket send error: {e}")
             self.remove(ws)
-                
+            
+logger = logging.getLogger("uvicorn.access")
+class FilterLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        paths_to_exclude = ["static", "get_gps", "get_gpsv2"]
+        logger.disabled = False
+        for p in paths_to_exclude:
+            if p in request.url.path:
+                logger.disabled = True
+        response = await call_next(request)
+        return response
+                    
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -103,6 +117,7 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有请求方法
     allow_headers=["*"],  # 允许所有请求头
 )
+app.add_middleware(FilterLogMiddleware)
 
 ws_manager = WSManager()
 
@@ -176,6 +191,8 @@ def mode_cb(data):
     global ws_manager
     if data.armed == False and ws_manager.data.get("arm", False) == True:
         ws_manager.publish({"event": "disarm"}, "event")
+    if data.armed == True and ws_manager.data.get("arm", False) == False:
+        ws_manager.publish({"event": "arm"}, "event")
     ws_manager.publish({"mode": data.mode, "arm": data.armed, "connected": data.connected})
     
     

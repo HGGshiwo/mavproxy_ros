@@ -3,7 +3,7 @@
 from base.ctrl_node import Runner
 import rospy
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong
-from mavros_msgs.msg import PositionTarget, SysStatus, StatusText
+from mavros_msgs.msg import PositionTarget, SysStatus, StatusText, HomePosition
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Empty
 from geometry_msgs.msg import PoseStamped, Vector3, Twist, PointStamped
@@ -27,6 +27,7 @@ from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.1
+HOVER_THRESHOLD = 0.5
 
 class NodeType(Enum):
     INIT = "初始化"
@@ -55,6 +56,7 @@ class CtrlNode(_CtrlNode):
     land_enable = False
     detect_enable = False
     wp_enable = False
+    takeoff_enable = False
     
     def __init__(self, node_type):
         super().__init__(node_type)
@@ -64,6 +66,8 @@ class CtrlNode(_CtrlNode):
             self._register(CEventType.DETECT, self.detect_cb)
         if self.wp_enable:
             self._register(CEventType.SET_WP, self.set_wp_cb)
+        if self.takeoff_enable:
+            self._register(CEventType.SET_TAKEOFF, self.takeoff_cb)
             
     def land_cb(self):
         self.context.do_land()    
@@ -71,23 +75,38 @@ class CtrlNode(_CtrlNode):
         
     def detect_cb(self, msg):
         context = self.context
+        if time.time() - context.last_send < STOP_SPAN:
+            return
         if self.type != NodeType.FOLLOW: 
             context.node_before_detect = self.type
         context.do_detect(msg)
+        self.step(NodeType.FOLLOW)
     
     def set_wp(self, waypoint, land, rtl):
+        print(f"set wp return: {rtl} wp: {waypoint}")
         context = self.context
         context.land = land or rtl
         if rtl:
-            context.waypoint.append([context.takeoff_lon, context.takeoff_lat, context.takeoff_alt])
+            waypoint.append([context.takeoff_lon, context.takeoff_lat, context.takeoff_alt])
         context.waypoint = waypoint[1:]
         context.wp_idx = 0
     
-    def set_wp_cb(self, waypoint, speed, land, rtl):
-        self.set_wp(waypoint, land, rtl)
+    def set_wp_cb(self, waypoint, speed=None, land=False, rtl=False):
+        print(f"set wp return123: {rtl} wp: {waypoint}")
+        if len(waypoint) == 0 and not rtl:
+            raise ValueError("No waypoint found!")
+        if len(waypoint) <= 1:
+            # 如果只有一个航点(rtl为0个), 本来是不允许的, 现在额外插入一个
+            waypoint.insert(0, [0, 0, 10]) 
+        self.set_wp(waypoint, land, rtl) 
         context = self.context
         context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl) 
-        self.step(NodeType.LIFTING)        
+        self.step(NodeType.LIFTING)     
+    
+    def takeoff_cb(self, alt):
+        context = self.context
+        context.takeoff_alt = alt
+        self.step(NodeType.TAKING_OFF)
         
 class InitNode(CtrlNode):
     def __init__(self):
@@ -96,26 +115,22 @@ class InitNode(CtrlNode):
     @CtrlNode.on(CEventType.ODOM_OK)
     def odom_ok_cb(self):
         context = self.context
-        if context.rel_alt > 0.5:
+        if context.rel_alt > HOVER_THRESHOLD:
             self.step(NodeType.HOVER)
         else:
             self.step(NodeType.GROUND)
 
 class GroundNode(CtrlNode):
+    takeoff_enable = True
     def __init__(self):
         super().__init__(NodeType.GROUND)
-    
-    @CtrlNode.on(CEventType.SET_TAKEOFF)
-    def takeoff_cb(self, alt):
-        context = self.context
-        context.takeoff_alt = alt
-        self.step(NodeType.TAKING_OFF)
         
     @CtrlNode.on(CEventType.SET_WP)
-    def set_wp_cb(self, waypoint, speed, land, rtl):
+    def set_wp_cb(self, waypoint, speed=None, land=False, rtl=False):
         context = self.context
         context.takeoff_alt = waypoint[0][-1]
         self.set_wp(waypoint, land, rtl)
+        context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl) 
         self.step(NodeType.TAKING_OFF2)
     
 class TakeoffNode(CtrlNode):
@@ -148,18 +163,23 @@ class Takeoff2Node(CtrlNode):
     def takeoff_done_cb(self):
         context = self.context
         context.do_pub_takeoff()
-        self.step(NodeType.WP)
+        self.step(NodeType.LIFTING)
 
 class HoverNode(CtrlNode):
     detect_enable = True
     land_enable = True
     wp_enable = True
+    takeoff_enable = True
     def __init__(self):
         super().__init__(NodeType.HOVER)
     
     def enter(self):
         context = self.context
-        context.do_send_cmd(vx=0, vy=0, vz=0, ax=0, ay=0, az=0)
+        cmd_msg = Twist()
+        cmd_msg.linear.x = 0
+        cmd_msg.linear.y = 0
+        cmd_msg.linear.z = 0
+        context.cmd_vel_cb(cmd_msg)
 
 class LiftingNode(CtrlNode):
     wp_enable = True
@@ -195,12 +215,17 @@ class WpNode(CtrlNode):
     @CtrlNode.on(CEventType.WP_FINISH)
     def wp_finish_cb(self):
         context = self.context
-        context.ws_pub.publish(json.dumps({
+        context.do_ws_pub({
+            "type": "event",
             "event": "progress",
             "cur": context.wp_idx + 1, # wp_idx是到达点的前一个点
             "total": len(context.waypoint),
-        }))
-        print(f"pub wp {context.wp_idx + 1} / {len(context.waypoint)}")
+        })
+        context.do_ws_pub({
+            "type": "state",
+            "wp_idx": context.wp_idx + 1,
+        })
+        print(f"wp done: {context.waypoint[context.wp_idx]}")
         context.wp_idx += 1
         if context.wp_idx >= len(context.waypoint):
             if context.land:
@@ -220,7 +245,7 @@ class LandNode(CtrlNode):
 
     @CtrlNode.on(CEventType.LAND_DONE)
     def land_done_cb(self):
-        self.setp(NodeType.GROUND)
+        self.step(NodeType.GROUND)
         
 class FollowNode(CtrlNode):
     detect_enable = True
@@ -230,7 +255,7 @@ class FollowNode(CtrlNode):
     @CtrlNode.on(CEventType.STOP_FOLLOW)
     def stop_follow_cb(self):
         context = self.context
-        context.last_send = time.time() + STOP_SPAN
+        context.last_send = time.time()
         rospy.set_param("/UAV0/perception/yolo_detection/enable_detection", False)
         rospy.set_param("/UAV0/perception/object_location/object_location_node/enable_send", False)
         node_before_detect = NodeType.LIFTING if context.node_before_detect == NodeType.WP else context.node_before_detect
@@ -268,6 +293,7 @@ class Control(Node):
         self.lift_alt = 0
         
         self.arm = False
+        self.mode = "UNKNOWN"
         self.odom = None
         self.lat = 0
         self.lon = 0
@@ -291,7 +317,9 @@ class Control(Node):
             step_cb=self.step_cb
         )
         
-            
+    def do_ws_pub(self, data):
+        self.ws_pub.publish(json.dumps(data))
+    
     def step_cb(self, prev, cur):
         self.ws_pub.publish(json.dumps({"type": "state", "state": cur.value}))
     
@@ -300,14 +328,13 @@ class Control(Node):
         for i, wp in enumerate(waypoint):
             if i == 0:
                 command = "takeoff"
-            elif i == len(self.waypoint) - 1 and land:
+            elif i == len(waypoint) - 1 and land:
                 command = "land"
             else:
                 command = "wp"
             out.append({"num": i, "lat": wp[1], "lon": wp[0], "alt": wp[2], "command": command})
         
-        for i in range(10):
-            self.ws_pub.publish(json.dumps({"mission_data": out, "type": "state"}))
+        self.do_ws_pub({"mission_data": out, "type": "state"})
         print(f'pub wp {json.dumps({"mission_data": out, "type": "state"})}')
         
     def do_send_cmd(self, *, px=None, py=None, pz=None, vx=None, vy=None, vz=None, ax=None, ay=None, az=None, yaw=None, yaw_rate=None):
@@ -336,10 +363,10 @@ class Control(Node):
         self.setpoint_pub.publish(target)
     
     def do_pub_takeoff(self):
-        self.ws_pub.publish(json.dumps({
+        self.do_ws_pub({
             "type": "event",
             "event": "takeoff"
-        }))
+        })
     
     def do_detect(self, msg):
         if msg.score < 0:
@@ -374,28 +401,33 @@ class Control(Node):
     def do_takeoff(self, alt):
         self.set_mode_service(0, 'GUIDED')
         
-        # 解锁
-        out = self.prearm()["msg"]
-        if out.get("arm", False) == False:
-            raise ValueError(out["reason"])
-        res = self.arm_service(True)
-        if res.result == 1:
-            raise ValueError("can not arm")
-        rospy.loginfo("Vehicle armed")
-        
-        # 持续发布目标点
-        rospy.loginfo("Taking off...")
-        response = self.takeoff_srv(
-            min_pitch=0,
-            yaw=0,
-            latitude=0,
-            longitude=0,
-            altitude=alt  # Target altitude in meters
-        )
-        rospy.loginfo("Takeoff command finished.")
         self.takeoff_lat = self.lat
         self.takeoff_lon = self.lon
         self.takeoff_alt = alt
+        
+        if self.rel_alt > HOVER_THRESHOLD and self.arm == True:
+            self.do_send_cmd(pz=alt)
+        else:    
+            # 解锁
+            out = self.prearm()["msg"]
+            if out.get("arm", False) == False:
+                raise ValueError(out["reason"])
+            res = self.arm_service(True)
+            if res.result == 1:
+                raise ValueError("can not arm")
+            rospy.loginfo("Vehicle armed")
+            
+            # 持续发布目标点
+            rospy.loginfo("Taking off...")
+            response = self.takeoff_srv(
+                min_pitch=0,
+                yaw=0,
+                latitude=0,
+                longitude=0,
+                altitude=alt  # Target altitude in meters
+            )
+            rospy.loginfo("Takeoff command finished.")
+        
     
     def enu2gps(self, enu):
         """
@@ -498,6 +530,14 @@ class Control(Node):
                 return
         return odom_msg
     
+    @Node.ros("/mavros/home_position/home", HomePosition)
+    def home_callback(self, msg):
+        if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
+            self.takeoff_lat = msg.geo.latitude
+            self.takeoff_lon = msg.geo.longitude
+            self.takeoff_alt = msg.geo.altitude
+            print(f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}")
+    
     @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
@@ -505,7 +545,6 @@ class Control(Node):
         
     @Node.ros("/ego_planner/finish_event", Empty)
     def wp_done_cb(self, data=None):
-        print(f"123 {self.runner.node.type} finish")
         self.runner.trigger(CEventType.WP_FINISH)
         
     @Node.ros("/mavros/local_position/odom", Odometry)  
@@ -590,7 +629,8 @@ class Control(Node):
         self.arm = data.armed
         if data.mode in ["RTL", "LAND"]:
             self.runner.trigger(CEventType.SET_LAND)
-    
+        self.mode = data.mode
+        
     @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
     def optimal_cb(self, msg):
         cur = time.time()
@@ -613,6 +653,8 @@ class Control(Node):
         
     @Node.ros("/planning/pos_cmd", PositionCommand)
     def cmd_cb(self, msg):
+        if self.runner.node.type != NodeType.WP:
+            return
         self.do_send_cmd(
             px=msg.position.x,
             py=msg.position.y,
@@ -624,8 +666,20 @@ class Control(Node):
             ay=msg.acceleration.y,
             az=msg.acceleration.z,
             yaw=msg.yaw
-        )   
-        
+        )
+           
+    @Node.route("/get_gpsv2", "GET")
+    def get_gpsv2(self):
+        return SUCCESS_RESPONSE({
+            "pos": [self.lon, self.lat, self.rel_alt],
+            "mode": self.mode,
+            "arm": self.arm,
+            "dis": {"current": 0, "min": 0, "max": 0},
+            "gps_n": 10,
+            "baro": -1,
+            "gps": [self.lon, self.lat, self.rel_alt],
+        })
+       
     @Node.route("/pos_vel", "POST")
     def set_pos_vel(self, pos, vel):
         v = vel
@@ -671,6 +725,7 @@ class Control(Node):
     def route_return(self, waypoint=None, speed=None):
         if waypoint is None:
             waypoint = []
+        print(f"123 {self.runner.node.type}")
         self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, speed=speed, rtl=True)
         return SUCCESS_RESPONSE()
     
