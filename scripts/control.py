@@ -195,7 +195,10 @@ class LiftingNode(CtrlNode):
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
-        self.context.do_send_cmd(pz=context.lift_alt)
+        odom = context.get_cur_odom()
+        px = odom.pose.pose.position.x
+        py = odom.pose.pose.position.y
+        context.do_send_cmd(pz=context.lift_alt, px=px, py=py)
     
     @CtrlNode.on(CEventType.LIFT_DONE)
     def lift_done_cb(self):
