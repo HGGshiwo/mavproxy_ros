@@ -215,12 +215,13 @@ class WpNode(CtrlNode):
     @CtrlNode.on(CEventType.WP_FINISH)
     def wp_finish_cb(self):
         context = self.context
-        context.do_ws_pub({
-            "type": "event",
-            "event": "progress",
-            "cur": context.wp_idx + 1, # wp_idx是到达点的前一个点
-            "total": len(context.waypoint),
-        })
+        if not context.land: # 非降落/返航情况下，发布进度
+            context.do_ws_pub({
+                "type": "event",
+                "event": "progress",
+                "cur": context.wp_idx + 1, # wp_idx是到达点的前一个点
+                "total": len(context.waypoint),
+            })
         context.do_ws_pub({
             "type": "state",
             "wp_idx": context.wp_idx + 1,

@@ -12,7 +12,10 @@ from rsos_msgs.srv import SetGimbalAngle, SetGimbalAngleResponse
 class Other(Node):
     def __init__(self):
         super().__init__()
+        self.recording = False
         self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
+        self.detect_param_name = "/UAV0/perception/yolo_detection/enable_detection"
+        self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
         
     @Node.route("/start_record", "POST")
     def start_record(self, bag_name):
@@ -23,6 +26,7 @@ class Other(Node):
         if not res.success:
             return ERROR_RESPONSE(res.message)
         self.ws_pub.publish(json.dumps({"type": "state", "record": True}))
+        self.recording = True
         return SUCCESS_RESPONSE(res.message)
     
     @Node.route("/stop_record", "POST")
@@ -32,8 +36,13 @@ class Other(Node):
         srv = rospy.ServiceProxy(service_name, Trigger)
         res = srv()
         self.ws_pub.publish(json.dumps({"type": "state", "record": False}))
+        self.recording = False
         return SUCCESS_RESPONSE()
 
+    @Node.route("/get_record", "GET")
+    def get_record(self):
+        return SUCCESS_RESPONSE(msg=self.recording)
+    
     @Node.route("/set_ros_param", "POST")
     def set_ros_param(self, name, value):
         rospy.set_param(name, value)
@@ -64,6 +73,24 @@ class Other(Node):
         if not res.success:
             return ERROR_RESPONSE(res.message)
         return SUCCESS_RESPONSE(res.message)
+    
+    @Node.route("/start_detect", "POST")
+    def start_detect(self):
+        rospy.set_param(self.detect_param_name, True)
+        rospy.set_param(self.follow_param_name, True)
+        return SUCCESS_RESPONSE()
+    
+    @Node.route("/stop_detect", "POST")
+    def stop_detect(self):
+        rospy.set_param(self.detect_param_name, False)
+        rospy.set_param(self.follow_param_name, False)
+        return SUCCESS_RESPONSE()
+    
+    @Node.route("/get_detect", "GET")
+    def get_detect(self):
+        param1 = rospy.get_param(self.detect_param_name)
+        param2 = rospy.get_param(self.follow_param_name)
+        return SUCCESS_RESPONSE(param1 and param2)
     
 if __name__ == '__main__':
     node = Other()
