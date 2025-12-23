@@ -81,7 +81,8 @@ class WSManager:
                 now = datetime.datetime.now()
                 # 格式化为字符串
                 now_str = now.strftime('%Y-%m-%d %H:%M:%S')
-                self.data["event"].append({"time": now_str, **data})
+                data["time"] = now_str
+                self.data["event"].append(data)
             ws_list_copy = self.ws_list.copy()  # 复制列表避免长时间持有锁
         
         # 为每个 WebSocket 创建发送任务
