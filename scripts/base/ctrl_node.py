@@ -1,5 +1,6 @@
 import time
 import threading
+import rospy 
 
 class EventType:
     IDLE = "idle"
@@ -59,11 +60,10 @@ class Runner:
         threading.Thread(target=self.idle, daemon=True).start()
         
     def idle(self):
-        last = time.time()
-        while True:
-            cur = time.time()
-            if cur - last > 1 / self.idle_hz:
-                self.trigger(EventType.IDLE)
+        rate = rospy.Rate(self.idle_hz)
+        while not rospy.is_shutdown():
+            self.trigger(EventType.IDLE)
+            rate.sleep()    
         
     def step(self, node_type):
         if self.step_cb is not None:

@@ -173,7 +173,7 @@ class Node:
     async def async_run(self):
         self.loop = asyncio.get_running_loop()
         while not rospy.is_shutdown():
-            await asyncio.sleep(0)
+            await asyncio.sleep(100)
     
     def run(self):
         self.register()
