@@ -15,7 +15,9 @@ class Other(Node):
         self.recording = False
         self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
         self.detect_param_name = "/UAV0/perception/yolo_detection/enable_detection"
+        self.detect_param_name2 = "/UAV0/perception/yolo_detection_smoke/enable_detection"
         self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
+        
         
     @Node.route("/start_record", "POST")
     def start_record(self, bag_name):
@@ -75,22 +77,38 @@ class Other(Node):
         return SUCCESS_RESPONSE(res.message)
     
     @Node.route("/start_detect", "POST")
-    def start_detect(self):
-        rospy.set_param(self.detect_param_name, True)
+    def start_detect(self, type="smoke"):
+        if type == "smoke":
+            rospy.set_param(self.detect_param_name, True)
+            rospy.set_param(self.detect_param_name2, False)
+        elif type == "nohardhead":
+            rospy.set_param(self.detect_param_name, False)
+            rospy.set_param(self.detect_param_name2, True)
+        else:
+            return ERROR_RESPONSE(f"{type} not support, must be smoke, nohardhead") 
+        self.ws_pub.publish(json.dumps({"type": "state", "detect": type}))
         rospy.set_param(self.follow_param_name, True)
         return SUCCESS_RESPONSE()
     
     @Node.route("/stop_detect", "POST")
     def stop_detect(self):
         rospy.set_param(self.detect_param_name, False)
+        rospy.set_param(self.detect_param_name2, False)
         rospy.set_param(self.follow_param_name, False)
+        self.ws_pub.publish(json.dumps({"type": "state", "detect": "Not Start"}))
         return SUCCESS_RESPONSE()
     
     @Node.route("/get_detect", "GET")
     def get_detect(self):
-        param1 = rospy.get_param(self.detect_param_name)
-        param2 = rospy.get_param(self.follow_param_name)
-        return SUCCESS_RESPONSE(param1 and param2)
+        param1 = rospy.get_param(self.detect_param_name, False)
+        param2 = rospy.get_param(self.follow_param_name, False)
+        param3 = rospy.get_param(self.detect_param_name2, False)
+        out = ""
+        if param1:
+            out = "nohardhead" if param2 else out
+        if param2:
+            out = "smoke" if param3 else out
+        return SUCCESS_RESPONSE(out)
     
 if __name__ == '__main__':
     node = Other()

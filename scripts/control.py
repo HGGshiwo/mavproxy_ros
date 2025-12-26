@@ -215,6 +215,10 @@ class WpNode(CtrlNode):
         context = self.context
         context.wp_pub.publish(context.gps_target2goal(context.waypoint[context.wp_idx]))
     
+    def exit(self):
+        context = self.context
+        context.stop_pub.publish(Empty())
+    
     @CtrlNode.on(CEventType.WP_FINISH)
     def wp_finish_cb(self):
         context = self.context
@@ -279,6 +283,7 @@ class Control(Node):
         self.cmd_service = rospy.ServiceProxy('/mavros/cmd/command', CommandLong)
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=-1)
         self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=-1)
+        self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
         self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
         self.target_pub = rospy.Publisher('/UAV0/perception/object_location/obj_lla', PointStamped, queue_size=1)
         
@@ -684,7 +689,7 @@ class Control(Node):
             "gps": [self.lon, self.lat, self.rel_alt],
         })
        
-    @Node.route("/pos_vel", "POST")
+    @Node.route("/set_posvel", "POST")
     def set_pos_vel(self, pos, vel):
         v = vel
         diff_x, diff_y, diff_z = self.gps_target2enu_diff(pos)

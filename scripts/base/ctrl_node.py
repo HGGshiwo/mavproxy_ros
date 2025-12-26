@@ -22,6 +22,9 @@ class CtrlNode:
     def enter(self):
         pass
     
+    def exit(self):
+        pass
+    
     def _register(self, event_type, func):
         func_new = lambda _, **kwargs: func(**kwargs) # 忽略self
         func_new.__name__ = func.__name__
@@ -68,6 +71,8 @@ class Runner:
     def step(self, node_type):
         if self.step_cb is not None:
             self.step_cb(self.node.type, node_type)
+        if self.node is not None:
+            self.node.exit()
         self.node = self.node_map[node_type]
         self.node.enter()
         
