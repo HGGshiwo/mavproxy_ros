@@ -547,11 +547,17 @@ class Control(Node):
             self.takeoff_alt = msg.geo.altitude
             print(f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}")
     
-    @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
+    @Node.ros("/mavros/global_position/global", NavSatFix)
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
         self.lon = data.longitude
-        
+    
+    @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
+    def gps_cb2(self, data: NavSatFix):
+        self.gps_lat = data.latitude
+        self.gps_lon = data.longitude
+        self.gps_alt = data.altitude
+      
     @Node.ros("/ego_planner/finish_event", Empty)
     def wp_done_cb(self, data=None):
         self.runner.trigger(CEventType.WP_FINISH)
@@ -686,7 +692,7 @@ class Control(Node):
             "dis": {"current": 0, "min": 0, "max": 0},
             "gps_n": 10,
             "baro": -1,
-            "gps": [self.lon, self.lat, self.rel_alt],
+            "gps": [self.gps_lon, self.gps_lat, self.gps_alt],
         })
        
     @Node.route("/set_posvel", "POST")
