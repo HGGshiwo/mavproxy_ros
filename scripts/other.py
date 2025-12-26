@@ -79,13 +79,13 @@ class Other(Node):
     @Node.route("/start_detect", "POST")
     def start_detect(self, type="smoke"):
         if type == "smoke":
-            rospy.set_param(self.detect_param_name, True)
             rospy.set_param(self.detect_param_name2, False)
-        elif type == "nohardhead":
+            rospy.set_param(self.detect_param_name, True)
+        elif type == "nohardhat":
             rospy.set_param(self.detect_param_name, False)
             rospy.set_param(self.detect_param_name2, True)
         else:
-            return ERROR_RESPONSE(f"{type} not support, must be smoke, nohardhead") 
+            return ERROR_RESPONSE(f"{type} not support, must be smoke, nohardhat") 
         self.ws_pub.publish(json.dumps({"type": "state", "detect": type}))
         rospy.set_param(self.follow_param_name, True)
         return SUCCESS_RESPONSE()
@@ -105,7 +105,7 @@ class Other(Node):
         param3 = rospy.get_param(self.detect_param_name2, False)
         out = ""
         if param1:
-            out = "nohardhead" if param2 else out
+            out = "nohardhat" if param2 else out
         if param2:
             out = "smoke" if param3 else out
         return SUCCESS_RESPONSE(out)
