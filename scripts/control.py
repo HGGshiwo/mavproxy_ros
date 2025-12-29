@@ -26,8 +26,8 @@ from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 
 STOP_SPAN = 100
-TAKEOFF_THRESHOLD = 0.1
-HOVER_THRESHOLD = 0.1
+TAKEOFF_THRESHOLD = 0.05
+HOVER_THRESHOLD = 0.05
 
 class NodeType(Enum):
     INIT = "初始化"
@@ -245,6 +245,9 @@ class WpNode(CtrlNode):
             self.step(NodeType.LIFTING)
         
 class LandNode(CtrlNode):
+    takeoff_enable = True
+    wp_enable = True
+    land_enable = True
     def __init__(self):
         super().__init__(NodeType.LANDING)
     
@@ -614,7 +617,7 @@ class Control(Node):
         self.setpoint_pub.publish(target)
     
     def check_alt(self, target, threshold):
-        return math.fabs(self.rel_alt - target) < math.max(target, 0.5) * threshold
+        return math.fabs(self.rel_alt - target) < max(target, 0.5) * threshold
     
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
