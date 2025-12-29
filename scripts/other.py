@@ -14,8 +14,10 @@ class Other(Node):
         super().__init__()
         self.recording = False
         self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
-        self.detect_param_name = "/UAV0/perception/yolo_detection/enable_detection"
-        self.detect_param_name2 = "/UAV0/perception/yolo_detection_smoke/enable_detection"
+        self.detect_param = {
+            "nohardhat": "/UAV0/perception/yolo_detection/enable_detection",
+            "smoke": "/UAV0/perception/yolo_detection_smoke/enable_detection"
+        }
         self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
         
         
@@ -78,36 +80,31 @@ class Other(Node):
     
     @Node.route("/start_detect", "POST")
     def start_detect(self, type="smoke"):
-        if type == "smoke":
-            rospy.set_param(self.detect_param_name2, False)
-            rospy.set_param(self.detect_param_name, True)
-        elif type == "nohardhat":
-            rospy.set_param(self.detect_param_name, False)
-            rospy.set_param(self.detect_param_name2, True)
-        else:
-            return ERROR_RESPONSE(f"{type} not support, must be smoke, nohardhat") 
+        for _, name in self.detect_param.items():
+            rospy.set_param(name, False)
+        if type not in self.detect_param:
+            return ERROR_RESPONSE(f"{type} not in {', '.join(self.detect_param.keys())}")
+        rospy.set_param(self.detect_param[type], True)
         self.ws_pub.publish(json.dumps({"type": "state", "detect": type}))
         rospy.set_param(self.follow_param_name, True)
         return SUCCESS_RESPONSE()
     
     @Node.route("/stop_detect", "POST")
     def stop_detect(self):
-        rospy.set_param(self.detect_param_name, False)
-        rospy.set_param(self.detect_param_name2, False)
+        for _, name in self.detect_param.items():
+            rospy.set_param(name, False)
         rospy.set_param(self.follow_param_name, False)
         self.ws_pub.publish(json.dumps({"type": "state", "detect": "Not Start"}))
         return SUCCESS_RESPONSE()
     
     @Node.route("/get_detect", "GET")
     def get_detect(self):
-        param1 = rospy.get_param(self.detect_param_name, False)
-        param2 = rospy.get_param(self.follow_param_name, False)
-        param3 = rospy.get_param(self.detect_param_name2, False)
         out = ""
-        if param1:
-            out = "nohardhat" if param2 else out
-        if param2:
-            out = "smoke" if param3 else out
+        if rospy.get_param(self.follow_param_name, False):
+            for _out, param_name in self.detect_param.items():
+                if rospy.get_param(param_name, False):
+                    out = _out
+                    break     
         return SUCCESS_RESPONSE(out)
     
 if __name__ == '__main__':
