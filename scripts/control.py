@@ -27,7 +27,7 @@ from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.1
-HOVER_THRESHOLD = 0.5
+HOVER_THRESHOLD = 0.1
 
 class NodeType(Enum):
     INIT = "初始化"
@@ -612,17 +612,20 @@ class Control(Node):
         target.yaw = target_yaw
         # 发布
         self.setpoint_pub.publish(target)
-        
+    
+    def check_alt(self, target, threshold):
+        return math.fabs(self.rel_alt - target) < math.max(target, 0.5) * threshold
+    
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
         if self.odom is not None:
             self.runner.trigger(CEventType.ODOM_OK)
-        if math.fabs(self.rel_alt - self.takeoff_alt) < TAKEOFF_THRESHOLD:
+        if self.check_alt(self.takeoff_alt, TAKEOFF_THRESHOLD):
            self.runner.trigger(CEventType.TAKEOFF_DONE)  
-        if math.fabs(self.rel_alt - 0) < TAKEOFF_THRESHOLD:
+        if self.check_alt(0, TAKEOFF_THRESHOLD):
             self.runner.trigger(CEventType.LAND_DONE)
-        if math.fabs(self.rel_alt - self.lift_alt) < TAKEOFF_THRESHOLD:
+        if self.check_alt(self.lift_alt, TAKEOFF_THRESHOLD):
             self.runner.trigger(CEventType.LIFT_DONE)
         
     @Node.ros("/mavros/sys_status", SysStatus)
@@ -645,6 +648,8 @@ class Control(Node):
         self.arm = data.armed
         if data.mode in ["RTL", "LAND"]:
             self.runner.trigger(CEventType.SET_LAND)
+        if self.arm == False:
+            self.runner.trigger(CEventType.LAND_DONE)
         self.mode = data.mode
         
     @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
