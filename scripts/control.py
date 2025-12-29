@@ -87,7 +87,8 @@ class CtrlNode(_CtrlNode):
         context = self.context
         context.land = land or rtl
         if rtl:
-            waypoint.append([context.takeoff_lon, context.takeoff_lat, context.takeoff_alt])
+            return_alt = waypoint[-1][-1] # 最后一个点的高度作为返航高度
+            waypoint.append([context.takeoff_lon, context.takeoff_lat, return_alt])
         context.waypoint = waypoint[1:]
         context.wp_idx = 0
     
@@ -95,7 +96,7 @@ class CtrlNode(_CtrlNode):
         print(f"set wp return123: {rtl} wp: {waypoint}")
         if len(waypoint) == 0 and not rtl:
             raise ValueError("No waypoint found!")
-        if len(waypoint) <= 1:
+        if (len(waypoint) == 1 and not rtl) or (rtl and len(waypoint) == 0):
             # 如果只有一个航点(rtl为0个), 本来是不允许的, 现在额外插入一个
             waypoint.insert(0, [0, 0, 10]) 
         self.set_wp(waypoint, land, rtl) 
@@ -740,7 +741,6 @@ class Control(Node):
     def route_return(self, waypoint=None, speed=None):
         if waypoint is None:
             waypoint = []
-        print(f"123 {self.runner.node.type}")
         self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, speed=speed, rtl=True)
         return SUCCESS_RESPONSE()
     
