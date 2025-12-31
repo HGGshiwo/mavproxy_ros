@@ -628,11 +628,12 @@ class Control(Node):
         self.setpoint_pub.publish(target)
     
     def check_alt(self, target, threshold):
-        return math.fabs(self.rel_alt - target) < max(target * threshold, 0.5)
+        min_alt_threshold = rospy.get_param("~min_alt_threshold", 0.9)
+        return math.fabs(self.rel_alt - target) < max(target * threshold, min_alt_threshold)
     
     def check_hover(self):
         """判断是否处于悬停状态"""
-        return self.rel_alt > HOVER_THRESHOLD and self.arm == True
+        return  self.arm == True
     
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
@@ -661,11 +662,13 @@ class Control(Node):
     
     @Node.ros("/mavros/state", State)
     def mode_cb(self, data):
-        self.arm = data.armed
-        if data.mode in ["RTL", "LAND"]:
-            self.runner.trigger(CEventType.SET_LAND)
-        if self.arm == False:
+        if self.arm == True and data == False:
             self.runner.trigger(CEventType.DISARM)
+            
+        self.arm = data.armed
+        land_mode = ["RTL", "LAND"]
+        if (self.mode not in land_mode) and (data.mode in land_mode):
+            self.runner.trigger(CEventType.SET_LAND)
         self.mode = data.mode
         
     @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
