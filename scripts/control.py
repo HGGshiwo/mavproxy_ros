@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 from base.ctrl_node import Runner
 import rospy
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong
@@ -26,8 +28,8 @@ from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 
 STOP_SPAN = 100
-TAKEOFF_THRESHOLD = 0.05
-HOVER_THRESHOLD = 0.05
+TAKEOFF_THRESHOLD = 0.05 # 高度判断阈值(比例)
+HOVER_THRESHOLD = 1 # 判断为悬停状态(绝对高度)
 
 class NodeType(Enum):
     INIT = "初始化"
@@ -48,7 +50,7 @@ class CEventType(EventType):
     DETECT = "detect"
     TAKEOFF_DONE = "takeoff_done"
     LIFT_DONE = "lift_done"
-    LAND_DONE = "land_done"
+    DISARM = "DISARM"
     WP_FINISH = "wp_finish"
     STOP_FOLLOW = "stop_follow"
     
@@ -57,6 +59,9 @@ class CtrlNode(_CtrlNode):
     detect_enable = False
     wp_enable = False
     takeoff_enable = False
+    ground_enable = True # 是否进入ground状态
+    
+    context: Control
     
     def __init__(self, node_type):
         super().__init__(node_type)
@@ -68,7 +73,13 @@ class CtrlNode(_CtrlNode):
             self._register(CEventType.SET_WP, self.set_wp_cb)
         if self.takeoff_enable:
             self._register(CEventType.SET_TAKEOFF, self.takeoff_cb)
-            
+        
+        if self.ground_enable:
+            self._register(CEventType.DISARM, self.land_done_cb)
+
+    def land_done_cb(self):
+        self.step(NodeType.GROUND)
+         
     def land_cb(self):
         self.context.do_land()    
         self.step(NodeType.LANDING)
@@ -93,7 +104,6 @@ class CtrlNode(_CtrlNode):
         context.wp_idx = 0
     
     def set_wp_cb(self, waypoint, speed=None, land=False, rtl=False):
-        print(f"set wp return123: {rtl} wp: {waypoint}")
         if len(waypoint) == 0 and not rtl:
             raise ValueError("No waypoint found!")
         if (len(waypoint) == 1 and not rtl) or (rtl and len(waypoint) == 0):
@@ -101,6 +111,7 @@ class CtrlNode(_CtrlNode):
             waypoint.insert(0, [0, 0, 10]) 
         self.set_wp(waypoint, land, rtl) 
         context = self.context
+        context.set_mode_service(0, "GUIDED")
         context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl) 
         self.step(NodeType.LIFTING)     
     
@@ -110,13 +121,14 @@ class CtrlNode(_CtrlNode):
         self.step(NodeType.TAKING_OFF)
         
 class InitNode(CtrlNode):
+    ground_enable = False
     def __init__(self):
         super().__init__(NodeType.INIT)
     
     @CtrlNode.on(CEventType.ODOM_OK)
     def odom_ok_cb(self):
         context = self.context
-        if context.rel_alt > HOVER_THRESHOLD:
+        if context.check_hover():
             self.step(NodeType.HOVER)
         else:
             self.step(NodeType.GROUND)
@@ -255,9 +267,7 @@ class LandNode(CtrlNode):
         context = self.context
         context.do_land()
 
-    @CtrlNode.on(CEventType.LAND_DONE)
-    def land_done_cb(self):
-        self.step(NodeType.GROUND)
+
         
 class FollowNode(CtrlNode):
     detect_enable = True
@@ -313,7 +323,8 @@ class Control(Node):
         self.land = False
         self.speed = 0
         self.odom_lock = threading.Lock()
-    
+        self._wp_raw = None
+        
         self.runner = Runner(
             node_list=[
                 InitNode(),
@@ -617,7 +628,11 @@ class Control(Node):
         self.setpoint_pub.publish(target)
     
     def check_alt(self, target, threshold):
-        return math.fabs(self.rel_alt - target) < max(target, 0.5) * threshold
+        return math.fabs(self.rel_alt - target) < max(target * threshold, 0.5)
+    
+    def check_hover(self):
+        """判断是否处于悬停状态"""
+        return self.rel_alt > HOVER_THRESHOLD and self.arm == True
     
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
@@ -626,8 +641,6 @@ class Control(Node):
             self.runner.trigger(CEventType.ODOM_OK)
         if self.check_alt(self.takeoff_alt, TAKEOFF_THRESHOLD):
            self.runner.trigger(CEventType.TAKEOFF_DONE)  
-        if self.check_alt(0, TAKEOFF_THRESHOLD):
-            self.runner.trigger(CEventType.LAND_DONE)
         if self.check_alt(self.lift_alt, TAKEOFF_THRESHOLD):
             self.runner.trigger(CEventType.LIFT_DONE)
         
@@ -652,7 +665,7 @@ class Control(Node):
         if data.mode in ["RTL", "LAND"]:
             self.runner.trigger(CEventType.SET_LAND)
         if self.arm == False:
-            self.runner.trigger(CEventType.LAND_DONE)
+            self.runner.trigger(CEventType.DISARM)
         self.mode = data.mode
         
     @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
@@ -728,9 +741,13 @@ class Control(Node):
     
     @Node.route("/set_waypoint", "POST")
     def set_waypoint(self, waypoint, speed=None, land=False, rtl=False):
-        rospy.loginfo(f"receive wp: {json.dumps(waypoint)}")
+        self._wp_raw = copy.deepcopy(waypoint)
         self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, speed=speed, land=land, rtl=rtl)
         return SUCCESS_RESPONSE()
+    
+    @Node.route("/get_waypoint", "GET")
+    def get_waypoint(self):
+        return SUCCESS_RESPONSE(self._wp_raw)
     
     @Node.route("/set_mode", "POST")
     def route_set_mode(self, mode):
