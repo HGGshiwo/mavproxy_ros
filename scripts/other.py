@@ -8,6 +8,7 @@ from rsos_msgs.srv import StartBagRecord
 from std_srvs.srv import Trigger
 import json
 from rsos_msgs.srv import SetGimbalAngle, SetGimbalAngleResponse
+from mavros_msgs.msg import SysStatus
 
 class Other(Node):
     def __init__(self):
@@ -20,7 +21,18 @@ class Other(Node):
         }
         self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
         
+    @Node.ros("/mavros/sys_status", SysStatus)
+    def sys_status_cb(self, msg: SysStatus):
+        data = {}
+        if msg.battery_remaining != -1:
+            data["battery_remaining"] = msg.battery_remaining  # 百分比
+        if msg.current_battery != -1:
+            data["current_battery"] = msg.current_battery * 0.01 # cA * 0.01 = A 
+        if msg.voltage_battery != 65536:
+            data["voltage_battery"] = msg.voltage_battery / 1000
+        self.ws_pub.publish(json.dumps({"type": "state", **data}))
         
+           
     @Node.route("/start_record", "POST")
     def start_record(self, bag_name):
         service_name = "/data_recorder/start_recording"
