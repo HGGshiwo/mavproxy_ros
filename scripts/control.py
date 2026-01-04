@@ -204,6 +204,17 @@ class LiftingNode(CtrlNode):
     def enter(self):
         context = self.context
         context.lift_alt = context.waypoint[context.wp_idx][-1]
+        diff_x, diff_y, diff_z = context.gps_target2enu_diff(context.waypoint[context.wp_idx])
+        bearing_rad = None
+        try:
+            bearing_rad = math.atan2(diff_x, diff_y)  # 核心：参数顺序x(E), y(N)
+            
+            if bearing_rad < 0: # 标准化到0-2π范围
+                bearing_rad += 2 * math.pi
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+        context.lift_yaw = bearing_rad
     
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
@@ -211,10 +222,11 @@ class LiftingNode(CtrlNode):
         odom = context.get_cur_odom()
         px = odom.pose.pose.position.x
         py = odom.pose.pose.position.y
-        context.do_send_cmd(pz=context.lift_alt, px=px, py=py)
+        context.do_send_cmd(pz=context.lift_alt, px=px, py=py, yaw=context.lift_yaw)
     
     @CtrlNode.on(CEventType.LIFT_DONE)
     def lift_done_cb(self):
+        time.sleep(1) # 额外等待1秒完成高度调整
         self.step(NodeType.WP)
 
 class WpNode(CtrlNode):
@@ -314,6 +326,7 @@ class Control(Node):
         self.takeoff_lon = 0
         self.takeoff_alt = 0
         self.lift_alt = 0
+        self.lift_yaw = None
         
         self.arm = False
         self.mode = "UNKNOWN"

@@ -1,5 +1,5 @@
 roslaunch gazebo_sim iris_with_roscam.launch
-sim_vehicle.py --no-rebuild --no-mavproxy -v ArduCopter -f gazebo-iris
+sim_vehicle.py --no-rebuild --no-mavproxy -v ArduCopter -f gazebo-iris --custom-location=30.1119319,120.140883,0,0
 roslaunch gazebo_sim apm.launch fcu_url:=tcp://:5760@
 # rosrun mavproxy_ros connection.py
 # rosrun mavproxy_ros control.py
