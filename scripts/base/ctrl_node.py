@@ -92,11 +92,11 @@ class Runner:
         self.step_cb = step_cb
         
     def trigger(self, event_type, **kwargs):
-            if self.node is None:
-                return
+        if self.node is None:
+            return
+        with self.lock:
             handlers = self.node.event_handler.get(event_type, [])
             for h in handlers:
-                with self.lock:
-                    # print(self.node.type, h.__name__, kwargs)
-                    h(self.node, **kwargs)
+                # print(self.node.type, h.__name__, kwargs)
+                h(self.node, **kwargs)
                     

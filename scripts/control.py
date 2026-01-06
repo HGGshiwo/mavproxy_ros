@@ -26,6 +26,7 @@ from mavros_msgs.msg import State
 from visualization_msgs.msg import Marker
 from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
+from tf.transformations import euler_from_quaternion
 
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.05 # 高度判断阈值(比例)
@@ -146,6 +147,12 @@ class GroundNode(CtrlNode):
         context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl) 
         self.step(NodeType.TAKING_OFF2)
     
+    @CtrlNode.on(CEventType.IDLE)
+    def idle_cb(self):
+        context = self.context
+        if context.check_hover():
+            self.step(NodeType.HOVER)
+    
 class TakeoffNode(CtrlNode):
     land_enable = True
     wp_enable = True
@@ -205,24 +212,22 @@ class LiftingNode(CtrlNode):
         context = self.context
         context.lift_alt = context.waypoint[context.wp_idx][-1]
         diff_x, diff_y, diff_z = context.gps_target2enu_diff(context.waypoint[context.wp_idx])
-        bearing_rad = None
+        
+        odom = context.get_cur_odom()
+        self.px = odom.pose.pose.position.x
+        self.py = odom.pose.pose.position.y
+        
         try:
-            bearing_rad = math.atan2(diff_x, diff_y)  # 核心：参数顺序x(E), y(N)
-            
-            if bearing_rad < 0: # 标准化到0-2π范围
-                bearing_rad += 2 * math.pi
-        except Exception as e:
+            context.lift_yaw = context.enu_xy2yaw(diff_x, diff_y) # 这里是enu的yaw
+        except:
             import traceback
             traceback.print_exc()
-        context.lift_yaw = bearing_rad
-    
+        
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
-        odom = context.get_cur_odom()
-        px = odom.pose.pose.position.x
-        py = odom.pose.pose.position.y
-        context.do_send_cmd(pz=context.lift_alt, px=px, py=py, yaw=context.lift_yaw)
+        context.do_send_cmd(pz=context.lift_alt, px=self.px, py=self.py, yaw=context.lift_yaw)
+        # context.do_send_cmd(yaw=context.lift_yaw)
     
     @CtrlNode.on(CEventType.LIFT_DONE)
     def lift_done_cb(self):
@@ -310,7 +315,7 @@ class Control(Node):
         self.wp_pub = rospy.Publisher("/move_base_simple/goal2", PoseStamped, queue_size=-1)
         self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=-1)
         self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
-        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local',PositionTarget, queue_size=1)
+        self.setpoint_pub = rospy.Publisher( '/mavros/setpoint_raw/local', PositionTarget, queue_size=1)
         self.target_pub = rospy.Publisher('/UAV0/perception/object_location/obj_lla', PointStamped, queue_size=1)
         
         self.send_time = 0
@@ -326,7 +331,7 @@ class Control(Node):
         self.takeoff_lon = 0
         self.takeoff_alt = 0
         self.lift_alt = 0
-        self.lift_yaw = None
+        self.lift_yaw = None # ENU,向东为正,逆时针增加
         
         self.arm = False
         self.mode = "UNKNOWN"
@@ -337,6 +342,7 @@ class Control(Node):
         self.speed = 0
         self.odom_lock = threading.Lock()
         self._wp_raw = None
+        self.yaw = None # NED, 向北为正, 顺时针增加
         
         self.runner = Runner(
             node_list=[
@@ -359,6 +365,14 @@ class Control(Node):
     
     def step_cb(self, prev, cur):
         self.ws_pub.publish(json.dumps({"type": "state", "state": cur.value}))
+    
+    def enu_xy2yaw(self, diff_x, diff_y):
+        """注意, yaw正东为0度,逆时针为正!"""
+        bearing_rad = None
+        bearing_rad = math.atan2(diff_y, diff_x)  # 核心：参数顺序x(E), y(N) 
+        if bearing_rad < 0: # 标准化到0-2π范围
+            bearing_rad += 2 * math.pi
+        return bearing_rad
     
     def do_pub_wp(self, waypoint, land):
         out = []
@@ -396,6 +410,7 @@ class Control(Node):
         target.acceleration_or_force = Vector3(*ctrl_data[6:9])
         target.yaw = ctrl_data[9]
         target.yaw_rate = ctrl_data[10]
+        target.type_mask = type_mask
         # 发布
         self.setpoint_pub.publish(target)
     
@@ -465,6 +480,39 @@ class Control(Node):
             )
             rospy.loginfo("Takeoff command finished.")
         
+    def quaternion_to_enu_yaw(self, quaternion):
+        """
+        将四元数转换为ENU坐标系的Yaw角
+        
+        参数:
+            quaternion: [x, y, z, w]
+        
+        返回:
+            yaw_enu_deg: ENU坐标系下的航向角（0-360°，0°=北）
+        """
+        # 转换为欧拉角（顺序：roll, pitch, yaw）
+        # 注意：这是机体坐标系相对于ENU坐标系的旋转
+        euler = euler_from_quaternion(quaternion)
+        
+        # MAVROS默认发布的是机体系到ENU的旋转
+        # 机体系：X前，Y左，Z上
+        # ENU系：X东，Y北，Z天
+        
+        # 从四元数得到的yaw是机体相对于ENU的航向
+        # 但需要调整以获得正确的ENU航向
+        yaw_rad = euler[2]  # 机头方向相对于东轴的夹角
+        
+        # 转换为ENU航向：从北开始，顺时针为正
+        # 公式：enu_yaw = 90° - yaw_rad（度数）
+        enu_yaw_rad = math.pi/2 - yaw_rad
+        
+        # 规范化到0-2π范围
+        if enu_yaw_rad < 0:
+            enu_yaw_rad += 2 * math.pi
+        if enu_yaw_rad > 2 * math.pi:
+            enu_yaw_rad -= 2 * math.pi
+        
+        return enu_yaw_rad
     
     def enu2gps(self, enu):
         """
@@ -596,6 +644,13 @@ class Control(Node):
             self.runner.trigger(CEventType.ODOM_OK)
         with self.odom_lock:
             self.odom = msg
+        quaternion = [
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z,
+            msg.pose.pose.orientation.w
+        ]
+        self.yaw = self.quaternion_to_enu_yaw(quaternion)
         
     @Node.ros("/UAV0/perception/object_location/location_vel", PointObj)
     def target_cb(self, msg):
@@ -644,9 +699,17 @@ class Control(Node):
         min_alt_threshold = rospy.get_param("~min_alt_threshold", 0.9)
         return math.fabs(self.rel_alt - target) < max(target * threshold, min_alt_threshold)
     
+    def check_yaw(self, yaw_enu):
+        yaw_ned = math.pi/2 - yaw_enu 
+        if yaw_ned < 0:
+            yaw_ned += 2 * math.pi
+        if yaw_ned > 2 * math.pi:
+            yaw_ned -= 2 * math.pi
+        return math.fabs(self.yaw - yaw_ned) < 0.1
+    
     def check_hover(self):
         """判断是否处于悬停状态"""
-        return  self.arm == True
+        return  self.arm == True and self.rel_alt >= HOVER_THRESHOLD
     
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
@@ -656,7 +719,8 @@ class Control(Node):
         if self.check_alt(self.takeoff_alt, TAKEOFF_THRESHOLD):
            self.runner.trigger(CEventType.TAKEOFF_DONE)  
         if self.check_alt(self.lift_alt, TAKEOFF_THRESHOLD):
-            self.runner.trigger(CEventType.LIFT_DONE)
+            if self.lift_yaw is not None and self.check_yaw(self.lift_yaw):
+                self.runner.trigger(CEventType.LIFT_DONE)
         
     @Node.ros("/mavros/sys_status", SysStatus)
     def systatus_cb(self, data):
@@ -793,8 +857,9 @@ class Control(Node):
     @Node.route("/get_gps", "GET")
     def get_gps(self):
         rel_alt = 0 if self.rel_alt is None else self.rel_alt
+        yaw = 0 if self.yaw is None else self.yaw
         return {
-            "msg": [self.lon, self.lat, rel_alt],
+            "msg": [self.lon, self.lat, rel_alt, yaw],
             "status": "succecss"
         }
     
