@@ -243,11 +243,36 @@ class WpNode(CtrlNode):
 
     def enter(self):
         context = self.context
-        context.wp_pub.publish(context.gps_target2goal(context.waypoint[context.wp_idx]))
-    
+        goal = context.gps_target2goal(context.waypoint[context.wp_idx])
+        px = goal.pose.position.x
+        py = goal.pose.position.y
+        pz = goal.pose.position.z
+        self.goal = [px, py, pz]    
+        print(px, py, pz)
+        self.planner_enable = context.planner_enable # 按照进入的时候是否开启判断
+        if self.planner_enable:
+            context.wp_pub.publish(goal)
+        else:
+            context.stop_pub.publish(Empty())
+            context.do_send_cmd(px=px, py=py, pz=pz)
+            
     def exit(self):
         context = self.context
         context.stop_pub.publish(Empty())
+    
+    @CtrlNode.on(CEventType.IDLE)
+    def idle_cb(self):
+        context = self.context
+        if not self.planner_enable:
+            cur_pos = [
+                context.odom.pose.pose.position.x, 
+                context.odom.pose.pose.position.y, 
+                context.odom.pose.pose.position.z
+            ]
+            dis = np.sqrt((cur_pos[0] - self.goal[0]) ** 2 + (cur_pos[1] - self.goal[1]) ** 2 + (cur_pos[2] - self.goal[2]) ** 2)
+            context.ws_pub.publish(json.dumps({"type": "state", "dis": dis}))
+            if dis < 2:
+                self.wp_finish_cb()
     
     @CtrlNode.on(CEventType.WP_FINISH)
     def wp_finish_cb(self):
@@ -343,6 +368,7 @@ class Control(Node):
         self.odom_lock = threading.Lock()
         self._wp_raw = None
         self.yaw = None # NED, 向北为正, 顺时针增加
+        self.planner_enable = True
         
         self.runner = Runner(
             node_list=[
@@ -739,7 +765,7 @@ class Control(Node):
     
     @Node.ros("/mavros/state", State)
     def mode_cb(self, data):
-        if self.arm == True and data == False:
+        if self.arm == True and data.armed == False:
             self.runner.trigger(CEventType.DISARM)
             
         self.arm = data.armed
@@ -771,6 +797,8 @@ class Control(Node):
     @Node.ros("/planning/pos_cmd", PositionCommand)
     def cmd_cb(self, msg):
         if self.runner.node.type != NodeType.WP:
+            return
+        if not self.planner_enable:
             return
         self.do_send_cmd(
             px=msg.position.x,
@@ -862,6 +890,22 @@ class Control(Node):
             "msg": [self.lon, self.lat, rel_alt, yaw],
             "status": "succecss"
         }
+    
+    @Node.route("/stop_planner", "POST")
+    def stop_planner(self):
+        self.planner_enable = False
+        self.ws_pub.publish(json.dumps({"type": "state", "planner": "disable"}))
+        return SUCCESS_RESPONSE()
+    
+    @Node.route("/start_planner", "POST")
+    def start_planner(self):
+        self.planner_enable = True
+        self.ws_pub.publish(json.dumps({"type": "state", "planner": "enable"}))
+        return SUCCESS_RESPONSE()
+    
+    @Node.route("/get_planner", "GET")
+    def get_planner(self):
+        return SUCCESS_RESPONSE(msg=self.planner_enable)
     
     @Node.route("/arm", "POST")
     def do_arm(self):

@@ -59,7 +59,7 @@ class RequestHandler:
 class WSManager:
     def __init__(self):
         self.ws_list = []
-        self.data = {"type": "state", "connected": False, "record": False, "event": [], "state": "初始化中", "detect": "Not Start"}
+        self.data = {"type": "state", "connected": False, "record": False, "event": [], "state": "初始化中", "detect": "Not Start", "planner": "enable"}
         self.lock = threading.Lock()
         
     async def add(self, ws):

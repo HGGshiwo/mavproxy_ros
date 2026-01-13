@@ -12,3 +12,5 @@ roslaunch ego_planner single_run_in_exp.launch odom_topic:=/mavros/local_positio
 rosservice call /mavros/param/get "param_id: 'PLND_ENABLED'"
 
 rostopic pub /mavros/ws std_msgs/String 'data: "{\"type\": \"event\", \"event\": \"detect\"}"' --rate 10
+
+rosservice call /mavros/cmd/command "{command: 246, param1: 1, confirmation: true}"
