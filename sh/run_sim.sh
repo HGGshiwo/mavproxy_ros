@@ -14,3 +14,6 @@ rosservice call /mavros/param/get "param_id: 'PLND_ENABLED'"
 rostopic pub /mavros/ws std_msgs/String 'data: "{\"type\": \"event\", \"event\": \"detect\"}"' --rate 10
 
 rosservice call /mavros/cmd/command "{command: 246, param1: 1, confirmation: true}"
+
+
+rosrun rsos_msgs fake_record.py

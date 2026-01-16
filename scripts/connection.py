@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import datetime
 import logging
 from starlette.middleware.base import BaseHTTPMiddleware
+from mavros_msgs.msg import GPSRAW
 
 loop = None
 def run_in_loop(task):
@@ -59,7 +60,8 @@ class RequestHandler:
 class WSManager:
     def __init__(self):
         self.ws_list = []
-        self.data = {"type": "state", "connected": False, "record": False, "event": [], "state": "初始化中", "detect": "Not Start", "planner": "enable"}
+        self.data = {"type": "state", "connected": False, "record": False, "event": [], 
+                     "state": "初始化中", "detect": "Not Start", "planner": "enable", "gps_fix_type": -1}
         self.lock = threading.Lock()
         
     async def add(self, ws):
@@ -201,6 +203,10 @@ def gps_cb(data):
     global ws_manager
     ws_manager.publish({"gps_nsats": data.data})
 
+def gps_fix_cb(data: GPSRAW):
+    global ws_manager
+    ws_manager.publish({"gps_fix_type": data.fix_type})
+
 def alt_cb(data):
     global ws_manager
     ws_manager.publish({"rel_alt": data.data})
@@ -249,6 +255,8 @@ if __name__ == "__main__":
     rospy.Subscriber("/mavros/global_position/raw/satellites", UInt32, gps_cb)
     rospy.Subscriber("/mavros/global_position/rel_alt", Float64, alt_cb)
     rospy.Subscriber("/mavros/statustext/recv", StatusText, state_cb)
+    rospy.Subscriber("/mavros/gpsstatus/gps1/raw", GPSRAW, gps_fix_cb)
+    rospy.Subscriber("/mavros/gpsstatus/gps2/raw", GPSRAW, gps_fix_cb)
     rospy.Subscriber("ws", String, ws_cb)
     rospy.loginfo('wait for mavros service')
     rospy.wait_for_service('/mavros/set_stream_rate')

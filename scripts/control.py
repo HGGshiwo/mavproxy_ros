@@ -27,6 +27,7 @@ from visualization_msgs.msg import Marker
 from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 from tf.transformations import euler_from_quaternion
+import requests
 
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.05 # 高度判断阈值(比例)
@@ -94,23 +95,24 @@ class CtrlNode(_CtrlNode):
         context.do_detect(msg)
         self.step(NodeType.FOLLOW)
     
-    def set_wp(self, waypoint, land, rtl):
+    def set_wp(self, waypoint: list, nodeEventList: list|None, land: bool, rtl: bool):
         print(f"set wp return: {rtl} wp: {waypoint}")
         context = self.context
         context.land = land or rtl
+        context.nodeEventList = nodeEventList
         if rtl:
             return_alt = waypoint[-1][-1] # 最后一个点的高度作为返航高度
             waypoint.append([context.takeoff_lon, context.takeoff_lat, return_alt])
         context.waypoint = waypoint[1:]
         context.wp_idx = 0
     
-    def set_wp_cb(self, waypoint, speed=None, land=False, rtl=False):
+    def set_wp_cb(self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False):
         if len(waypoint) == 0 and not rtl:
             raise ValueError("No waypoint found!")
         if (len(waypoint) == 1 and not rtl) or (rtl and len(waypoint) == 0):
             # 如果只有一个航点(rtl为0个), 本来是不允许的, 现在额外插入一个
             waypoint.insert(0, [0, 0, 10]) 
-        self.set_wp(waypoint, land, rtl) 
+        self.set_wp(waypoint, nodeEventList, land, rtl) 
         context = self.context
         context.set_mode_service(0, "GUIDED")
         context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl) 
@@ -121,6 +123,31 @@ class CtrlNode(_CtrlNode):
         context.takeoff_alt = alt
         self.step(NodeType.TAKING_OFF)
         
+    def run_wp_event(self, event: dict):
+        event_type = event["eventType"]
+        data = {}
+        if event_type == "video":
+            if event["eventStatus"] == "on":
+                url = "start_record"
+                data = {"bag_name": event.get("eventParam", "")}
+            elif event["eventStatus"] == "off":
+                url = "stop_record"
+        elif event_type == "hat":
+            if event["eventStatus"] == "on":
+                url = "start_detect"
+                data = {"type": "nohardhat"}
+            elif event["eventStatus"] == "off":
+                url = "stop_detect"
+        elif event_type == "smoke":
+            if event["eventStatus"] == "on":
+                url = "start_detect"
+                data = {"type": "smoke"}
+            elif event["eventStatus"] == "off":
+                url = "stop_detect"
+        
+        res = requests.post(f"http://localhost:8000/{url}", data)
+        print(f"url: {url} data: {data} res: {res.json()}")
+                
 class InitNode(CtrlNode):
     ground_enable = False
     def __init__(self):
@@ -140,10 +167,10 @@ class GroundNode(CtrlNode):
         super().__init__(NodeType.GROUND)
         
     @CtrlNode.on(CEventType.SET_WP)
-    def set_wp_cb(self, waypoint, speed=None, land=False, rtl=False):
+    def set_wp_cb(self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False):
         context = self.context
         context.takeoff_alt = waypoint[0][-1]
-        self.set_wp(waypoint, land, rtl)
+        self.set_wp(waypoint, nodeEventList, land, rtl)
         context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl) 
         self.step(NodeType.TAKING_OFF2)
     
@@ -255,7 +282,14 @@ class WpNode(CtrlNode):
         else:
             context.stop_pub.publish(Empty())
             context.do_send_cmd(px=px, py=py, pz=pz)
-            
+        
+        if context.nodeEventList is not None:
+            event_list = context.nodeEventList[context.wp_idx]
+            print(f"event list: {event_list}")
+            if event_list is not None:
+                for event in event_list:
+                    self.run_wp_event(event)
+          
     def exit(self):
         context = self.context
         context.stop_pub.publish(Empty())
@@ -263,14 +297,15 @@ class WpNode(CtrlNode):
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
-        if not self.planner_enable:
-            cur_pos = [
-                context.odom.pose.pose.position.x, 
-                context.odom.pose.pose.position.y, 
-                context.odom.pose.pose.position.z
-            ]
-            dis = np.sqrt((cur_pos[0] - self.goal[0]) ** 2 + (cur_pos[1] - self.goal[1]) ** 2 + (cur_pos[2] - self.goal[2]) ** 2)
-            context.ws_pub.publish(json.dumps({"type": "state", "dis": dis}))
+        cur_pos = [
+            context.odom.pose.pose.position.x, 
+            context.odom.pose.pose.position.y, 
+            context.odom.pose.pose.position.z
+        ]
+        dis = np.sqrt((cur_pos[0] - self.goal[0]) ** 2 + (cur_pos[1] - self.goal[1]) ** 2 + (cur_pos[2] - self.goal[2]) ** 2)
+        context.ws_pub.publish(json.dumps({"type": "state", "dis": dis}))
+            
+        if not self.planner_enable:   
             if dis < 2:
                 self.wp_finish_cb()
     
@@ -351,6 +386,7 @@ class Control(Node):
         self.state = None
         self.last_send = -1
         self.waypoint = []
+        self.nodeEventList = None
         self.wp_idx = 0
         self.takeoff_lat = 0
         self.takeoff_lon = 0
@@ -653,7 +689,7 @@ class Control(Node):
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
         self.lon = data.longitude
-    
+        
     @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
     def gps_cb2(self, data: NavSatFix):
         self.gps_lat = data.latitude
@@ -848,9 +884,9 @@ class Control(Node):
         return SUCCESS_RESPONSE()
     
     @Node.route("/set_waypoint", "POST")
-    def set_waypoint(self, waypoint, speed=None, land=False, rtl=False):
+    def set_waypoint(self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False):
         self._wp_raw = copy.deepcopy(waypoint)
-        self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, speed=speed, land=land, rtl=rtl)
+        self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, nodeEventList=nodeEventList, speed=speed, land=land, rtl=rtl)
         return SUCCESS_RESPONSE()
     
     @Node.route("/get_waypoint", "GET")
