@@ -16,7 +16,7 @@ def parse_param(param):
         return param.real
     return 0
 
-class ParamNode(Node):
+class Param(Node):
     def __init__(self):
         super().__init__()
         rospy.wait_for_service('/mavros/param/pull')
@@ -73,5 +73,5 @@ class ParamNode(Node):
         return SUCCESS_RESPONSE(data)
     
 if __name__ == '__main__':
-    node = ParamNode()
+    node = Param()
     node.run()

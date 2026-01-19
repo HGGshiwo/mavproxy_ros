@@ -145,7 +145,7 @@ class CtrlNode(_CtrlNode):
             elif event["eventStatus"] == "off":
                 url = "stop_detect"
         
-        res = requests.post(f"http://localhost:8000/{url}", data)
+        res = requests.post(f"http://localhost:8000/{url}", json=data)
         print(f"url: {url} data: {data} res: {res.json()}")
                 
 class InitNode(CtrlNode):
@@ -183,6 +183,8 @@ class GroundNode(CtrlNode):
 class TakeoffNode(CtrlNode):
     land_enable = True
     wp_enable = True
+    takeoff_enable = True
+    
     def __init__(self):
         super().__init__(NodeType.TAKING_OFF)
     
@@ -199,6 +201,8 @@ class TakeoffNode(CtrlNode):
 class Takeoff2Node(CtrlNode):
     wp_enable = True
     land_enable = True
+    takeoff_enable = True
+    
     def __init__(self):
         super().__init__(NodeType.TAKING_OFF2)
     
@@ -343,7 +347,9 @@ class LandNode(CtrlNode):
     def enter(self):
         context = self.context
         context.do_land()
+        requests.post(f"http://localhost:8000/stop_record")
 
+    
 
         
 class FollowNode(CtrlNode):

@@ -4,7 +4,7 @@ import threading
 import rospy
 from mavproxy_ros.srv import ProcessRequest, ProcessRequestResponse
 from mavproxy_ros.srv import Register
-from mavros_msgs.srv import ParamSet
+from mavros_msgs.srv import ParamSet, ParamGet
 from mavros_msgs.msg import ParamValue, OverrideRCIn
 from std_msgs.msg import Empty
 import json
@@ -23,28 +23,47 @@ class Node:
         rospy.init_node(self.name)
         rospy.wait_for_service('/mavros/param/set')
         rospy.wait_for_service('register')
+        rospy.wait_for_service('/mavros/param/pull')
         self.param_set_service = rospy.ServiceProxy('/mavros/param/set', ParamSet)
         self.register_service = rospy.ServiceProxy('register', Register)
         self.rc_override_pub = rospy.Publisher('/mavros/rc/override', OverrideRCIn, queue_size=10)
         rospy.Subscriber('do_register', Empty, self.register_route)
-        self.set_config()
+        
     
-    def get_param(self, name):
+    def _get_param(self, name):
         return rospy.get_param(f"{self.name}/{name}", {})
-     
-    def set_config(self):
-        param_cfg = self.get_param("param")
+    
+    def wait_for_param(self, param_name, timeout=300):
+        rospy.loginfo("Waiting for parameter sync...")
+        start_time = rospy.get_time()
+        param_get = rospy.ServiceProxy('/mavros/param/get', ParamGet)
+        while not rospy.is_shutdown() and rospy.get_time() - start_time < timeout:
+            try:
+                resp = param_get(param_name)
+                if resp.success:
+                    rospy.loginfo("Parameter sync complete")
+                    return True
+            except rospy.ServiceException as e:
+                rospy.logwarn("Failed to get param: %s", e)
+            rospy.sleep(1.0)
+        rospy.logerr("Parameter sync timeout")
+        return False
+    
+    def _set_config(self):
+        param_cfg = self._get_param("param")
+        print(self.name, param_cfg)
         for param_name, value in param_cfg.items():
-            self.set_param(param_name, value)
+            self.wait_for_param(param_name)
+            self._set_param(param_name, value)
             time.sleep(0.1) # 避免过快发送请求
             
-        rc_cfg = self.get_param("rc")
+        rc_cfg = self._get_param("rc")
         for rc_name, value in rc_cfg.items():
             rc_name = int(rc_name)
-            self.set_rc(rc_name, value)
+            self._set_rc(rc_name, value)
             time.sleep(0.1)
     
-    def set_param(self, param_name: str, value):
+    def _set_param(self, param_name: str, value):
         """
         设置单个飞控参数
         :param param_name: 参数名称
@@ -73,7 +92,7 @@ class Node:
             rospy.logerr(f"服务调用失败: {e}")
             return False
     
-    def set_rc(self, channel: int, pwm: int) -> bool:
+    def _set_rc(self, channel: int, pwm: int) -> bool:
         """
         设置单个 RC 通道
         :param channel: 通道号 (0-7)
@@ -177,5 +196,7 @@ class Node:
     
     def run(self):
         self.register()
+        self._set_config()
         rospy.loginfo(f"{self.__class__.__name__.lower()} start")
+        
         asyncio.run(self.async_run())
