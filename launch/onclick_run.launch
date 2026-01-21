@@ -1,16 +1,23 @@
 <launch>
     <arg name="debug" default="false" />
+    <arg name="param_file" default="$(find mavproxy_ros)/config/param.yml" />
+
     <group ns="mavproxy">
         <node pkg="mavproxy_ros" type="connection.py" name="connection" output="screen"/>
-        <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True" />
+        <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True">
+            <rosparam command="load" file="$(find mavproxy_ros)/config/control.yml"/>
+        </node>
         <node pkg="mavproxy_ros" type="pland.py" name="pland" output="screen" clear_params="true">
             <rosparam command="load" file="$(find mavproxy_ros)/config/pland.yml"/>
             <remap  from="/pland_camera/image_raw" to="/roscam/cam/image_raw"/>
         </node>
-        <node pkg="mavproxy_ros" type="param.py" name="param" output="screen"  />
+        <node pkg="mavproxy_ros" type="param.py" name="param" output="screen" clear_params="true">
+            <rosparam command="load" file="$(arg param_file)"/>
+        </node>
         <node pkg="mavproxy_ros" type="other.py" name="other" output="screen" clear_params="true">
             <rosparam command="load" file="$(find mavproxy_ros)/config/other.yml"/>
         </node>
         <node pkg="mavproxy_ros" type="dummy_service.py" name="dummy" output="screen" if="$(arg debug)" />
     </group>
+    <!-- <include file="$(find ntrip_client)/launch/ntrip_client.launch" /> -->
 </launch>

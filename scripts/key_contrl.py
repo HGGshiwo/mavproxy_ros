@@ -5,14 +5,14 @@ import pygame
 from argparse import ArgumentParser
 
 key_map = {
-    pygame.K_w: ('x', 1.0),
-    pygame.K_s: ('x', -1.0),
-    pygame.K_a: ('y', 1.0),
-    pygame.K_d: ('y', -1.0),
-    pygame.K_LEFT: ('th', 1.0),
-    pygame.K_RIGHT: ('th', -1.0),
-    pygame.K_DOWN: ('z', -1.0),
-    pygame.K_UP: ('z', 1.0)
+    pygame.K_w: ("x", 1.0),
+    pygame.K_s: ("x", -1.0),
+    pygame.K_a: ("y", 1.0),
+    pygame.K_d: ("y", -1.0),
+    pygame.K_LEFT: ("th", 1.0),
+    pygame.K_RIGHT: ("th", -1.0),
+    pygame.K_DOWN: ("z", -1.0),
+    pygame.K_UP: ("z", 1.0),
 }
 
 usage_lines = [
@@ -28,8 +28,9 @@ usage_lines = [
     "  Press: set speed to 1m/s; Release: clear only that axis",
     "  q: quit",
     "--------------------------------------",
-    "Make sure this window is focused!"
+    "Make sure this window is focused!",
 ]
+
 
 def draw_usage(screen, font):
     screen.fill((30, 30, 30))
@@ -37,12 +38,13 @@ def draw_usage(screen, font):
         text = font.render(line, True, (220, 220, 220))
         screen.blit(text, (10, 10 + i * 28))
 
+
 def main():
     paser = ArgumentParser()
     paser.add_argument("--topic", type=str, default="/cmd_vel")
     args = paser.parse_args()
-    
-    rospy.init_node('pygame_teleop')
+
+    rospy.init_node("pygame_teleop")
     pub = rospy.Publisher(args.topic, Twist, queue_size=1)
 
     pygame.init()
@@ -51,7 +53,7 @@ def main():
     pygame.display.set_caption("ROS Teleop Instructions")
 
     font = pygame.font.SysFont(None, 24)
-    control = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'th': 0.0}
+    control = {"x": 0.0, "y": 0.0, "z": 0.0, "th": 0.0}
     pressed = set()
     running = True
     clock = pygame.time.Clock()
@@ -76,10 +78,10 @@ def main():
                     pressed.remove(event.key)
         # 持续发送当前速度
         twist = Twist()
-        twist.linear.x = control['x']
-        twist.linear.y = control['y']
-        twist.linear.z = control['z']
-        twist.angular.z = control['th']
+        twist.linear.x = control["x"]
+        twist.linear.y = control["y"]
+        twist.linear.z = control["z"]
+        twist.angular.z = control["th"]
         pub.publish(twist)
         clock.tick(50)
 
@@ -87,5 +89,6 @@ def main():
     pygame.quit()
     print("\nExit keyboard teleop.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

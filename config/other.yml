@@ -1,7 +1,22 @@
 node_cfg: 
   - title: 相机
-    topic: /UAV0/sensor/video11_camera/enable_send  
+    topic: /UAV0/sensor/video11_camera/enable_send
+    type: boolean
   - title: 检测
     topic: /UAV0/perception/yolo_detection/enable_detection
+    type: boolean
   - title: 定位跟随
     topic: /UAV0/perception/object_location/object_location_node/enable_send
+    type: boolean
+  - title: 跟随速度
+    topic: /UAV0/perception/object_location/object_location_node/velocity/max_move_speed
+    type: number
+  - title: 精准降落
+    topic: /mavproxy/pland/param/PLND_ENABLED
+    type: number
+  - title: 高度判断阈值
+    topic: /mavproxy/control/min_alt_threshold
+    type: number
+  - title: NTRIP
+    topic: /ntrip_client/send_rtcm
+    type: boolean

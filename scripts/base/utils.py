@@ -1,12 +1,14 @@
 import time
 
-def SUCCESS_RESPONSE(msg = "OK"):
+
+def SUCCESS_RESPONSE(msg="OK"):
     return {"msg": msg, "status": "success"}
+
 
 def ERROR_RESPONSE(msg):
     return {"msg": msg, "status": "error"}
-        
-        
+
+
 class FPSHelper:
     def __init__(self, fps=-1, ps_cb=None):
         self.target_fps = fps
@@ -24,7 +26,7 @@ class FPSHelper:
             self.cnt_start = time.time()
             if self.ps_cb is not None:
                 self.ps_cb(self.fps)
-        
+
         self.frame_cnt += 1
         if block:
             if self.target_fps > 0 and now - self.start < 1 / self.target_fps:
