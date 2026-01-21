@@ -14,18 +14,18 @@ from cv_bridge import CvBridge
 
 class Pland(Node):
     def __init__(self):
-        super().__init__()   
+        super().__init__()
         self.tag_type = "tagCustom48h12"
         self.tag_id = 0
         self.camera_fov_x = 114
         self.camera_fov_y = 114
         self.detector = self.create_detector()
         self.landing_target_pub = rospy.Publisher(
-            '/mavros/landing_target/raw',
-            LandingTarget,
-            queue_size=10
+            "/mavros/landing_target/raw", LandingTarget, queue_size=10
         )
-        self.detect_res_pub = rospy.Publisher('/pland_camera/result', Image, queue_size=10)
+        self.detect_res_pub = rospy.Publisher(
+            "/pland_camera/result", Image, queue_size=10
+        )
         self.bridge = CvBridge()
         self.fps_helper = FPSHelper(fps=1)
 
@@ -39,7 +39,7 @@ class Pland(Node):
             decode_sharpening=0.25,
             debug=0,
         )
-    
+
     def detect_artag(self, detector, frame, return_frame=True):
         if detector is None:
             return None if not return_frame else (frame, None)
@@ -77,10 +77,10 @@ class Pland(Node):
 
     def artag2xy(self, detector, frame, fov_x=None, fov_y=None):
         # 创建二维码检测器
-        frame, points  = self.detect_artag(detector, frame, return_frame=True)
+        frame, points = self.detect_artag(detector, frame, return_frame=True)
         res = self.bridge.cv2_to_imgmsg(frame, "bgr8")
         self.detect_res_pub.publish(res)
-        
+
         if points is None:
             return None
 
@@ -108,27 +108,30 @@ class Pland(Node):
         :param angle_y: 目标角度 Y (弧度)
         """
         landing_target = LandingTarget()
-        
+
         # 时间戳（微秒）
         landing_target.header.stamp = rospy.Time.now()
-        landing_target.header.frame_id = 'map'
-        
+        landing_target.header.frame_id = "map"
+
         # 目标ID
         landing_target.target_num = 0
-        landing_target.frame = 12 # MAV_FRAME_BODY_FRD
+        landing_target.frame = 12  # MAV_FRAME_BODY_FRD
         landing_target.type = LandingTarget.VISION_FIDUCIAL
-        
+
         # 目标角度（弧度）
         landing_target.angle = [angle_x, angle_y]
-        
+
         # 距离（米）
         landing_target.distance = 0.0
-        
+
         # 发布消息
         self.landing_target_pub.publish(landing_target)
         # rospy.loginfo(f"发送着陆目标: angle_x={angle_x}, angle_y={angle_y}")
         if self.fps_helper.step(block=False):
-            rospy.loginfo(f"FPS:{self.fps_helper.fps} 发送着陆目标: angle_x={angle_x}, angle_y={angle_y}")
+            rospy.loginfo(
+                f"FPS:{self.fps_helper.fps} 发送着陆目标: angle_x={angle_x}, angle_y={angle_y}"
+            )
+
 
 if __name__ == "__main__":
     pland = Pland()

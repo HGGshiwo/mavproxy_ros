@@ -28,6 +28,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mavros_msgs.msg import GPSRAW
 
 loop = None
+
+
 def run_in_loop(task):
     global loop
     if loop is None:
@@ -43,7 +45,7 @@ class RequestHandler:
         self.topic = topic
         rospy.wait_for_service(topic)
         self.service = rospy.ServiceProxy(topic, ProcessRequest)
-            
+
     async def __call__(self, request: Request):
         request_data = {}
         request_data.update(request.path_params)
@@ -53,27 +55,36 @@ class RequestHandler:
             request_data.update(body)
         except Exception as e:
             pass  # 没有body或者不是json格式
-            
+
         response = self.service(request=json.dumps(request_data))
         return json.loads(response.response)
+
 
 class WSManager:
     def __init__(self):
         self.ws_list = []
-        self.data = {"type": "state", "connected": False, "record": False, "event": [], 
-                     "state": "初始化中", "detect": "Not Start", "planner": "enable", "gps_fix_type": -1}
+        self.data = {
+            "type": "state",
+            "connected": False,
+            "record": False,
+            "event": [],
+            "state": "初始化中",
+            "detect": "Not Start",
+            "planner": "enable",
+            "gps_fix_type": -1,
+        }
         self.lock = threading.Lock()
-        
+
     async def add(self, ws):
         await ws.send_json(self.data)  # 直接等待
         with self.lock:
             self.ws_list.append(ws)
-    
+
     def remove(self, ws):
         with self.lock:
             if ws in self.ws_list:
                 self.ws_list.remove(ws)
-    
+
     def publish(self, data, data_type="state"):
         with self.lock:
             data["type"] = data_type
@@ -82,26 +93,28 @@ class WSManager:
             elif data_type == "event":
                 now = datetime.datetime.now()
                 # 格式化为字符串
-                now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+                now_str = now.strftime("%Y-%m-%d %H:%M:%S")
                 data["time"] = now_str
                 self.data["event"].append(data)
             ws_list_copy = self.ws_list.copy()  # 复制列表避免长时间持有锁
-        
+
         # 为每个 WebSocket 创建发送任务
         for ws in ws_list_copy:
             asyncio.run_coroutine_threadsafe(
-                self._safe_send(ws, {**data, "type": data_type}), 
-                loop
+                self._safe_send(ws, {**data, "type": data_type}), loop
             )
-    
+
     async def _safe_send(self, ws, data):
         try:
             await ws.send_json(data)
         except Exception as e:
             print(f"WebSocket send error: {e}")
             self.remove(ws)
-            
+
+
 logger = logging.getLogger("uvicorn.access")
+
+
 class FilterLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         paths_to_exclude = ["static", "get_gps", "get_gpsv2"]
@@ -111,7 +124,8 @@ class FilterLogMiddleware(BaseHTTPMiddleware):
                 logger.disabled = True
         response = await call_next(request)
         return response
-                    
+
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -124,30 +138,39 @@ app.add_middleware(FilterLogMiddleware)
 
 ws_manager = WSManager()
 
+
 def get_manager():
     return ws_manager
 
+
 static_dir = Path(__file__).parent.parent.joinpath("static")
+
+
 @app.get("/")
-async def index():    
+async def index():
     return FileResponse(static_dir.joinpath("index.html"))
 
+
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
 
 @app.get("/video/{path}")
 async def video_feed(path: str):
     builder = VideoBuilder.create("http", path)
     return builder.build()
 
+
 @app.get("/video/{path:path}")
 async def video_feed(path: str):
     builder = VideoBuilder.create("http", path)
     return builder.build()
 
+
 @app.post("/offer/{path:path}")
 async def webrtc(path: str, arg: dict):
     builder = VideoBuilder.create("webrtc", path)
     return await builder.build(**arg)
+
 
 @app.post("/register")
 async def register_route(request: Request):
@@ -156,7 +179,7 @@ async def register_route(request: Request):
     method = data["method"]
     topic = data["topic"]
     handler = RequestHandler(path, method, topic)
-    
+
     # 动态添加路由
     app.add_api_route(
         path,
@@ -167,17 +190,17 @@ async def register_route(request: Request):
     app.setup()
     return SUCCESS_RESPONSE()
 
+
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, ws_manager: WSManager = Depends(get_manager)):
+async def websocket_endpoint(
+    websocket: WebSocket, ws_manager: WSManager = Depends(get_manager)
+):
     await websocket.accept()
     await ws_manager.add(websocket)  # 等待添加完成
     while True:
         try:
             # 添加超时，避免永久阻塞
-            data = await asyncio.wait_for(
-                websocket.receive_text(), 
-                timeout=1.0
-            )
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
         except asyncio.TimeoutError:
             # 超时是正常的，继续循环
             pass
@@ -186,9 +209,11 @@ async def websocket_endpoint(websocket: WebSocket, ws_manager: WSManager = Depen
             break
         except Exception:
             import traceback
+
             traceback.print_exc()
             ws_manager.remove(websocket)
             break
+
 
 def mode_cb(data):
     global ws_manager
@@ -196,32 +221,40 @@ def mode_cb(data):
         ws_manager.publish({"event": "disarm"}, "event")
     if data.armed == True and ws_manager.data.get("arm", False) == False:
         ws_manager.publish({"event": "arm"}, "event")
-    ws_manager.publish({"mode": data.mode, "arm": data.armed, "connected": data.connected})
-    
-    
+    ws_manager.publish(
+        {"mode": data.mode, "arm": data.armed, "connected": data.connected}
+    )
+
+
 def gps_cb(data):
     global ws_manager
     ws_manager.publish({"gps_nsats": data.data})
+
 
 def gps_fix_cb(data: GPSRAW):
     global ws_manager
     ws_manager.publish({"gps_fix_type": data.fix_type})
 
+
 def alt_cb(data):
     global ws_manager
     ws_manager.publish({"rel_alt": data.data})
+
 
 def state_cb(data):
     global ws_manager
     if data.severity > StatusText.WARNING:
         return
+    print(data.severity, data.text)
     ws_manager.publish({"error": data.text}, "error")
+
 
 def ws_cb(data):
     global ws_manager
     data = json.loads(data.data)
     data_type = data.get("type", "event")
     ws_manager.publish(data, data_type)
+
 
 async def run_server():
     config = Config(app, host="0.0.0.0", port=8000)
@@ -236,7 +269,7 @@ def register_cb(data):
     method = data.method
     topic = data.topic
     handler = RequestHandler(path, method, topic)
-    
+
     # 动态添加路由
     app.add_api_route(
         path,
@@ -248,9 +281,10 @@ def register_cb(data):
     res = SUCCESS_RESPONSE()
     return RegisterResponse(response=json.dumps(res))
 
+
 if __name__ == "__main__":
     # 启动 ROS 节点
-    rospy.init_node('connection')
+    rospy.init_node("connection")
     rospy.Subscriber("/mavros/state", State, mode_cb)
     rospy.Subscriber("/mavros/global_position/raw/satellites", UInt32, gps_cb)
     rospy.Subscriber("/mavros/global_position/rel_alt", Float64, alt_cb)
@@ -258,14 +292,14 @@ if __name__ == "__main__":
     rospy.Subscriber("/mavros/gpsstatus/gps1/raw", GPSRAW, gps_fix_cb)
     rospy.Subscriber("/mavros/gpsstatus/gps2/raw", GPSRAW, gps_fix_cb)
     rospy.Subscriber("ws", String, ws_cb)
-    rospy.loginfo('wait for mavros service')
-    rospy.wait_for_service('/mavros/set_stream_rate')
-    set_rate = rospy.ServiceProxy('/mavros/set_stream_rate', StreamRate)
+    rospy.loginfo("wait for mavros service")
+    rospy.wait_for_service("/mavros/set_stream_rate")
+    set_rate = rospy.ServiceProxy("/mavros/set_stream_rate", StreamRate)
     rospy.loginfo("done")
-    
+
     rospy.Service("register", Register, register_cb)
     start_pub = rospy.Publisher("do_register", Empty, queue_size=10)
-    
+
     req = StreamRateRequest()
     req.stream_id = 0
     req.message_rate = 10

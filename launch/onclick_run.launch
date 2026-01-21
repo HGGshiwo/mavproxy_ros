@@ -19,5 +19,5 @@
         </node>
         <node pkg="mavproxy_ros" type="dummy_service.py" name="dummy" output="screen" if="$(arg debug)" />
     </group>
-    <include file="$(find ntrip_client)/launch/ntrip_client.launch" />
+    <!-- <include file="$(find ntrip_client)/launch/ntrip_client.launch" /> -->
 </launch>
