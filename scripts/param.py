@@ -5,6 +5,7 @@ from mavros_msgs.srv import ParamPull, ParamGet
 from base.utils import ERROR_RESPONSE
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 import rospy
 import rospkg
 import os
@@ -48,8 +49,8 @@ class Param(Node):
         return params
 
     @Node.route("/set_param", "POST")
-    def set_param(self, data):
-        super().set_param(data["name"], data["value"])
+    def set_param(self, name: str, value: Any):
+        super()._set_param(name, value)
         return SUCCESS_RESPONSE("OK")
 
     @Node.route("/params", "GET")
