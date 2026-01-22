@@ -9,6 +9,7 @@ from mavros_msgs.msg import ParamValue, OverrideRCIn
 from std_msgs.msg import Empty
 import json
 import time
+from typing import Any
 
 
 def SUCCESS_RESPONSE(msg="OK"):
@@ -128,7 +129,7 @@ class Node:
         return wrapper
 
     @classmethod
-    def ros(cls, topic, topic_type):
+    def ros(cls, topic: str, topic_type: Any):
         def wrapper(func):
             func.topic = topic
             func.topic_type = topic_type

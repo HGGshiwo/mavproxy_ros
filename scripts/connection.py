@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import functools
 import rospy
 from std_msgs.msg import String, UInt32, Float64
 from mavros_msgs.msg import State
@@ -26,8 +27,11 @@ import datetime
 import logging
 from starlette.middleware.base import BaseHTTPMiddleware
 from mavros_msgs.msg import GPSRAW
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Dict, Any
 
 loop = None
+executor = ThreadPoolExecutor()
 
 
 def run_in_loop(task):
@@ -56,8 +60,14 @@ class RequestHandler:
         except Exception as e:
             pass  # 没有body或者不是json格式
 
-        response = self.service(request=json.dumps(request_data))
+        # 关键: 将任务放入异步队列防止阻塞服务器!
+        response = await self.to_thread(self.service, request=json.dumps(request_data))
         return json.loads(response.response)
+
+    async def to_thread(self, func: Callable, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        func = functools.partial(func, **kwargs)
+        return await loop.run_in_executor(executor, func, *args)
 
 
 class WSManager:
@@ -75,17 +85,17 @@ class WSManager:
         }
         self.lock = threading.Lock()
 
-    async def add(self, ws):
+    async def add(self, ws: WebSocket):
         await ws.send_json(self.data)  # 直接等待
         with self.lock:
             self.ws_list.append(ws)
 
-    def remove(self, ws):
+    def remove(self, ws: WebSocket):
         with self.lock:
             if ws in self.ws_list:
                 self.ws_list.remove(ws)
 
-    def publish(self, data, data_type="state"):
+    def publish(self, data: Dict[str, Any], data_type="state"):
         with self.lock:
             data["type"] = data_type
             if data_type == "state":

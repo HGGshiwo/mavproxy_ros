@@ -455,7 +455,7 @@ class Control(Node):
         # 状态机使用的变量
         self.rel_alt = None
         self.sys_status = None
-        self.state = None
+        self.state = ""
         self.last_send = -1
         self.waypoint = []
         self.nodeEventList = None
@@ -630,9 +630,7 @@ class Control(Node):
             out = self.prearm()["msg"]
             if out.get("arm", False) == False:
                 raise ValueError(out["reason"])
-            res = self.arm_service(True)
-            if res.result == 1:
-                raise ValueError("can not arm")
+            self._do_arm()
             rospy.loginfo("Vehicle armed")
 
             # 持续发布目标点
@@ -778,6 +776,20 @@ class Control(Node):
                 return
         return odom_msg
 
+    def _do_arm(self, timeout=10):
+        start_time = time.time()
+        self.state = ""
+        self.arm_service(True)
+        rate = rospy.Rate(5)
+        while True:
+            if self.arm:
+                break
+            if time.time() - start_time > timeout:
+                raise TimeoutError("arm timeout")
+            if self.state.startswith("Arm: "):
+                raise ValueError(self.state)
+            rate.sleep()   
+        
     @Node.ros("/mavros/home_position/home", HomePosition)
     def home_callback(self, msg):
         if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
@@ -1057,13 +1069,13 @@ class Control(Node):
 
     @Node.route("/arm", "POST")
     def do_arm(self):
-        res = self.arm_service(True)
+        self._do_arm()
         return SUCCESS_RESPONSE()
 
     @Node.route("/prearms", "GET")
     def prearm(self):
         # mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK
-        self.state = None
+        self.state = ""
         response = self.cmd_service(
             command=401,  # MAV_CMD_RUN_PREARM_CHECKS
             confirmation=0,
@@ -1080,7 +1092,7 @@ class Control(Node):
             return SUCCESS_RESPONSE({"arm": True})
         for i in range(1000):
             time.sleep(0.01)
-            if self.state is not None and self.state.startswith("PreArm: "):
+            if self.state.startswith("PreArm: "):
                 return SUCCESS_RESPONSE({"arm": False, "reason": self.state})
         return SUCCESS_RESPONSE({"arm": False, "reason": "wait for reason timeout"})
 
