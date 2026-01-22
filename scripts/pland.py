@@ -93,7 +93,8 @@ class Pland(Node):
         angle = delta * (fov_xy / 2)
         return [float(angle[0]), float(angle[1])]  # 返回角度, 单位弧度
 
-    @Node.ros("/UAV0/sensor/video11_camera/image_raw", Image)
+    # topic 在launch中修改
+    @Node.ros("/pland_camera/image_raw", Image)
     def pland_cb(self, frame):
         frame = self.bridge.imgmsg_to_cv2(frame, desired_encoding="bgr8")
         xy = self.artag2xy(self.detector, frame, self.camera_fov_x, self.camera_fov_y)
