@@ -25,9 +25,9 @@ class Node:
         self.loop = None
         self.name = self.__class__.__name__.lower()
         rospy.init_node(self.name)
-        rospy.wait_for_service("/mavros/param/set")
-        rospy.wait_for_service("register")
-        rospy.wait_for_service("/mavros/param/pull")
+        rospy.wait_for_service("/mavros/param/set", timeout=5)
+        rospy.wait_for_service("register", timeout=5)
+        rospy.wait_for_service("/mavros/param/pull", timeout=5)
         self.param_set_service = rospy.ServiceProxy("/mavros/param/set", ParamSet)
         self.register_service = rospy.ServiceProxy("register", Register)
         self.rc_override_pub = rospy.Publisher(
@@ -39,19 +39,19 @@ class Node:
         return rospy.get_param(f"{self.name}/{name}", default)
 
     def wait_for_param(self, param_name, timeout=300):
-        rospy.loginfo("Waiting for parameter sync...")
+        rospy.loginfo(f"Waiting for {param_name} parameter sync...")
         start_time = rospy.get_time()
         param_get = rospy.ServiceProxy("/mavros/param/get", ParamGet)
         while not rospy.is_shutdown() and rospy.get_time() - start_time < timeout:
             try:
                 resp = param_get(param_name)
                 if resp.success:
-                    rospy.loginfo("Parameter sync complete")
+                    rospy.loginfo(f"{param_name} Parameter sync complete")
                     return True
             except rospy.ServiceException as e:
-                rospy.logwarn("Failed to get param: %s", e)
+                rospy.logwarn(f"Failed to get param {param_name}: %s", e)
             rospy.sleep(1.0)
-        rospy.logerr("Parameter sync timeout")
+        rospy.logerr(f"Parameter {param_name} sync timeout")
         return False
 
     def _set_config(self):

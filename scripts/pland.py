@@ -16,6 +16,7 @@ import math
 
 class Pland(Node):
     def __init__(self):
+        self.init_done = False
         super().__init__()
         self.detector = self.create_detector()
         self.landing_target_pub = rospy.Publisher(
@@ -28,10 +29,14 @@ class Pland(Node):
         self.fps_helper = FPSHelper(fps=1)
         self.camera_fov_xy = None
         self.info_lock = threading.Lock()
-
+        self.detect_lock = threading.Lock()
+        self.init_done = True
+        print("pland init done")
+        
     def create_detector(self):
         tag_type = self._get_param("tag_type", "tagCustom48h12")
-        return Detector(
+        print("load detector")
+        det = Detector(
             families=tag_type,
             nthreads=1,
             quad_decimate=1.0,
@@ -40,13 +45,18 @@ class Pland(Node):
             decode_sharpening=0.25,
             debug=0,
         )
+        print("load done")
+        return det
 
     def detect_artag(self, detector, frame, return_frame=True):
         tag_id = self._get_param("tag_id", 0)
         if detector is None:
             return None if not return_frame else (frame, None)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        tags = detector.detect(gray)
+        with self.detect_lock:
+            tags = detector.detect(gray)
+        
+        # return frame, None
         if len(tags) == 0:
             return None if not return_frame else (frame, None)
         tag = [t for t in tags if t.tag_id == tag_id][0]
@@ -97,11 +107,14 @@ class Pland(Node):
 
     # topic 在launch中修改
     def _pland_cb(self, frame: np.ndarray):
+        if not self.init_done:
+            return
         with self.info_lock:
             if self.camera_fov_xy is None:
-                rospy.logwarn("No camera info received!, fallback to param")
-                camera_fov_x = self._get_param("camera_fov_x", 114)
-                camera_fov_y = self._get_param("camera_fov_y", 114)
+                rospy.logwarn("No camera info received!, skip")
+                # camera_fov_x = self._get_param("camera_fov_x", 114)
+                # camera_fov_y = self._get_param("camera_fov_y", 114)
+                return
             else:
                 camera_fov_x = self.camera_fov_xy[0]
                 camera_fov_y = self.camera_fov_xy[1]
