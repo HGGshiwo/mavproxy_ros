@@ -175,7 +175,7 @@ class CtrlNode(_CtrlNode):
 class InitNode(CtrlNode):
     ground_enable = False
     land_enable = False
-    
+
     def __init__(self):
         super().__init__(NodeType.INIT)
 
@@ -190,7 +190,7 @@ class InitNode(CtrlNode):
 
 class GroundNode(CtrlNode):
     takeoff_enable = True
-    
+
     def __init__(self):
         super().__init__(NodeType.GROUND)
 
@@ -788,8 +788,8 @@ class Control(Node):
                 raise TimeoutError("arm timeout")
             if self.state.startswith("Arm: "):
                 raise ValueError(self.state)
-            rate.sleep()   
-        
+            rate.sleep()
+
     @Node.ros("/mavros/home_position/home", HomePosition)
     def home_callback(self, msg):
         if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
@@ -1095,6 +1095,23 @@ class Control(Node):
             if self.state.startswith("PreArm: "):
                 return SUCCESS_RESPONSE({"arm": False, "reason": self.state})
         return SUCCESS_RESPONSE({"arm": False, "reason": "wait for reason timeout"})
+
+    @Node.route("/reboot_fcu", "POST")
+    def reboot_fcu(self):
+        rospy.wait_for_service("/mavros/cmd/command")
+        cmd_service = rospy.ServiceProxy("/mavros/cmd/command", CommandLong)
+
+        # MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN (246)
+        # param1=1: reboot autopilot, param2=0: do nothing for companion computer
+        response = cmd_service(
+            command=246,  # MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN
+            param1=1.0,  # 1 = reboot autopilot
+            param2=0.0,  # 0 = do nothing to companion
+            param3=0.0,
+            param4=0.0,
+            confirmation=0,
+        )
+        return SUCCESS_RESPONSE("OK" if response.success else "Failed")
 
 
 if __name__ == "__main__":
