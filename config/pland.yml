@@ -3,6 +3,13 @@ param:
   PLND_TYPE: 1
   PLND_OPTIONS: 1
 
+tag_id: 0
+tag_type: tagCustom48h12
+
+camera_fov_x: 114
+camera_fov_y: 114
+
+
   # 只在仿真中使用
   # SIM_SONAR_SCALE: 10
   # RNGFND1_TYPE: 1

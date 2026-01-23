@@ -35,8 +35,8 @@ class Node:
         )
         rospy.Subscriber("do_register", Empty, self.register_route)
 
-    def _get_param(self, name):
-        return rospy.get_param(f"{self.name}/{name}", {})
+    def _get_param(self, name: str, default=None):
+        return rospy.get_param(f"{self.name}/{name}", default)
 
     def wait_for_param(self, param_name, timeout=300):
         rospy.loginfo("Waiting for parameter sync...")
@@ -55,14 +55,14 @@ class Node:
         return False
 
     def _set_config(self):
-        param_cfg = self._get_param("param")
+        param_cfg = self._get_param("param", {})
         print(self.name, param_cfg)
         for param_name, value in param_cfg.items():
             self.wait_for_param(param_name)
             self._set_param(param_name, value)
             time.sleep(0.1)  # 避免过快发送请求
 
-        rc_cfg = self._get_param("rc")
+        rc_cfg = self._get_param("rc", {})
         for rc_name, value in rc_cfg.items():
             rc_name = int(rc_name)
             self._set_rc(rc_name, value)

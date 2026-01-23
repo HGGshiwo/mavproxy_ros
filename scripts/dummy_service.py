@@ -6,7 +6,8 @@ from mavros_msgs.srv import SetMode, SetModeResponse
 from mavros_msgs.srv import CommandTOL, CommandTOLResponse
 from mavros_msgs.srv import StreamRate, StreamRateResponse
 from mavros_msgs.srv import ParamSet, ParamSetResponse
-
+from mavros_msgs.srv import ParamGet, ParamGetResponse
+from mavros_msgs.srv import ParamPull, ParamPullResponse
 
 def arming_callback(req):
     rospy.loginfo("Dummy arming service called")
@@ -32,6 +33,14 @@ def paramset_callback(req):
     rospy.loginfo("Dummy param set called")
     return ParamSetResponse()
 
+def paramget_callback(req):
+    rospy.loginfo("Dummy param get called")
+    return ParamGetResponse(success=True)
+
+def parampull_callback(req):
+    rospy.loginfo("Dummy param pull called")
+    return ParamPullResponse(success=True)
+
 
 if __name__ == "__main__":
     rospy.init_node("dummy_mavros_services")
@@ -41,5 +50,7 @@ if __name__ == "__main__":
     srv3 = rospy.Service("/mavros/cmd/takeoff", CommandTOL, takeoff_callback)
     srv4 = rospy.Service("/mavros/param/set", ParamSet, paramset_callback)
     srv5 = rospy.Service("/mavros/set_stream_rate", StreamRate, streamrate_callback)
+    srv6 = rospy.Service("/mavros/param/get", ParamGet, paramget_callback)
+    srv7 = rospy.Service("/mavros/param/pull", ParamPull, parampull_callback)
     rospy.loginfo("Dummy MAVROS services are ready.")
     rospy.spin()

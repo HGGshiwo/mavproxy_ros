@@ -871,7 +871,7 @@ class Control(Node):
         self.setpoint_pub.publish(target)
 
     def check_alt(self, target, threshold):
-        min_alt_threshold = rospy.get_param("~min_alt_threshold", 0.9)
+        min_alt_threshold = self._get_param("min_alt_threshold", 0.5)
         return math.fabs(self.rel_alt - target) < max(
             target * threshold, min_alt_threshold
         )
@@ -923,7 +923,6 @@ class Control(Node):
         land_mode = ["RTL", "LAND"]
         # print(f"set land: {self.mode not in land_mode} {data.mode} {data.mode in land_mode}")
         if (self.mode not in land_mode) and (data.mode in land_mode):
-            print(123)
             self.runner.trigger(CEventType.SET_LAND)
         self.mode = data.mode
 

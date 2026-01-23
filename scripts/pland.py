@@ -1,24 +1,22 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
+import threading
 from base.utils import FPSHelper
 from base.node import Node
 import numpy as np
 from pupil_apriltags import Detector
 import cv2
 from mavros_msgs.msg import LandingTarget
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo
 import rospy
 from cv_bridge import CvBridge
+import math
 
 
 class Pland(Node):
     def __init__(self):
         super().__init__()
-        self.tag_type = "tagCustom48h12"
-        self.tag_id = 0
-        self.camera_fov_x = 114
-        self.camera_fov_y = 114
         self.detector = self.create_detector()
         self.landing_target_pub = rospy.Publisher(
             "/mavros/landing_target/raw", LandingTarget, queue_size=10
@@ -28,10 +26,13 @@ class Pland(Node):
         )
         self.bridge = CvBridge()
         self.fps_helper = FPSHelper(fps=1)
+        self.camera_fov_xy = None
+        self.info_lock = threading.Lock()
 
     def create_detector(self):
+        tag_type = self._get_param("tag_type", "tagCustom48h12")
         return Detector(
-            families=self.tag_type,
+            families=tag_type,
             nthreads=1,
             quad_decimate=1.0,
             quad_sigma=0.0,
@@ -41,13 +42,14 @@ class Pland(Node):
         )
 
     def detect_artag(self, detector, frame, return_frame=True):
+        tag_id = self._get_param("tag_id", 0)
         if detector is None:
             return None if not return_frame else (frame, None)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         tags = detector.detect(gray)
         if len(tags) == 0:
             return None if not return_frame else (frame, None)
-        tag = [t for t in tags if t.tag_id == self.tag_id][0]
+        tag = [t for t in tags if t.tag_id == tag_id][0]
         points = tag.corners.astype(int)  # 只用第一个二维码
         if not return_frame:
             return points
@@ -94,13 +96,73 @@ class Pland(Node):
         return [float(angle[0]), float(angle[1])]  # 返回角度, 单位弧度
 
     # topic 在launch中修改
-    @Node.ros("/pland_camera/image_raw", Image)
-    def pland_cb(self, frame):
-        frame = self.bridge.imgmsg_to_cv2(frame, desired_encoding="bgr8")
-        xy = self.artag2xy(self.detector, frame, self.camera_fov_x, self.camera_fov_y)
+    def _pland_cb(self, frame: np.ndarray):
+        with self.info_lock:
+            if self.camera_fov_xy is None:
+                rospy.logwarn("No camera info received!, fallback to param")
+                camera_fov_x = self._get_param("camera_fov_x", 114)
+                camera_fov_y = self._get_param("camera_fov_y", 114)
+            else:
+                camera_fov_x = self.camera_fov_xy[0]
+                camera_fov_y = self.camera_fov_xy[1]
+        xy = self.artag2xy(self.detector, frame, camera_fov_x, camera_fov_y)
         if xy is None:
             return
         self.set_landing_target(xy[0], xy[1])
+
+    @Node.ros("/pland_camera/image_raw", Image)
+    def pland_cb(self, frame: Image):
+        try:
+            frame = self.bridge.imgmsg_to_cv2(frame, desired_encoding="bgr8")
+            return self._pland_cb(frame)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    @Node.ros("/pland_camera/compressed", CompressedImage)
+    def pland_cb2(self, frame: CompressedImage):
+        try:
+            frame = self.bridge.compressed_imgmsg_to_cv2(frame, desired_encoding="bgr8")
+            return self._pland_cb(frame)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    @Node.ros("/UAV0/sensor/video11_camera/cam_info", CameraInfo)
+    def camera_info_cb(self, camera_info_msg: CameraInfo):
+        """
+        从camera_info消息计算水平和垂直FOV（单位：度）
+
+        参数:
+            camera_info_msg: sensor_msgs/CameraInfo消息
+
+        返回:
+            fov_x, fov_y (单位：度)
+        """
+        try:
+            # 获取图像尺寸
+            width = camera_info_msg.width
+            height = camera_info_msg.height
+
+            # 获取内参矩阵K（3x3行优先）
+            # K = [fx  0  cx]
+            #     [0  fy  cy]
+            #     [0   0   1]
+            fx = camera_info_msg.K[0]  # 水平焦距（像素）
+            fy = camera_info_msg.K[4]  # 垂直焦距（像素）
+
+            # 计算FOV（弧度）
+            fov_x_rad = 2 * math.atan(width / (2 * fx))
+            fov_y_rad = 2 * math.atan(height / (2 * fy))
+
+            # 转换为度
+            fov_x_deg = math.degrees(fov_x_rad)
+            fov_y_deg = math.degrees(fov_y_rad)
+            with self.info_lock:
+                self.camera_fov_xy = [fov_x_deg, fov_y_deg]
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
     def set_landing_target(self, angle_x, angle_y):
         """
@@ -130,7 +192,7 @@ class Pland(Node):
         # rospy.loginfo(f"发送着陆目标: angle_x={angle_x}, angle_y={angle_y}")
         if self.fps_helper.step(block=False):
             rospy.loginfo(
-                f"FPS:{self.fps_helper.fps} 发送着陆目标: angle_x={angle_x}, angle_y={angle_y}"
+                f"FPS:{self.fps_helper.fps} 发送着陆目标: angle_x={angle_x}, angle_y={angle_y} fov: {self.camera_fov_xy}"
             )
 
 

@@ -10,6 +10,7 @@
         <node pkg="mavproxy_ros" type="pland.py" name="pland" output="screen" clear_params="true">
             <rosparam command="load" file="$(find mavproxy_ros)/config/pland.yml"/>
             <remap  from="/pland_camera/image_raw" to="/UAV0/sensor/video11_camera/image_raw"/>
+            <remap  from="/pland_camera/compressed" to="/UAV0/sensor/video11_camera/compressed"/>
         </node>
         <node pkg="mavproxy_ros" type="param.py" name="param" output="screen" clear_params="true">
             <rosparam command="load" file="$(arg param_file)"/>
