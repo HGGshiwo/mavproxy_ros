@@ -483,8 +483,8 @@ class Control(Node):
 
     def register(self):
         super().register()
-        self.do_ws_pub({"type": "state", "planner": self.planner_enable})
-    
+        verison = rospy.get_param("/mavros/version")
+        self.do_ws_pub({"type": "state", "planner": self.planner_enable, "version": verison})
     
     def do_ws_pub(self, data):
         self.ws_pub.publish(json.dumps(data))
