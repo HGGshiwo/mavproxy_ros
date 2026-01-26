@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 from base.node import SUCCESS_RESPONSE, Node
+from base.utils import post_json
 import rospy
 from std_msgs.msg import String
 from base.utils import ERROR_RESPONSE
@@ -107,6 +108,7 @@ class Other(Node):
             rospy.set_param(name, False)
         rospy.set_param(self.follow_param_name, False)
         self.ws_pub.publish(json.dumps({"type": "state", "detect": "Not Start"}))
+        post_json("start_planner", {"auto": True})
         return SUCCESS_RESPONSE()
     
     @Node.route("/get_detect", "GET")

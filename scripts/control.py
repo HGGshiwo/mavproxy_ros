@@ -18,7 +18,7 @@ import threading
 from pyproj import CRS, Transformer
 import copy
 import numpy as np
-from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE
+from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE, post_json
 from base.node import Node
 import time
 import math
@@ -27,7 +27,7 @@ from visualization_msgs.msg import Marker
 from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 from tf.transformations import euler_from_quaternion
-import requests
+
 
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.05  # 高度判断阈值(比例)
@@ -59,21 +59,7 @@ class CEventType(EventType):
     STOP_FOLLOW = "stop_follow"
 
 
-def post_json(
-    url: str, data: dict | None = None, verbose: bool = True, timeout: float = 5
-):
-    if data is None:
-        data = {}
-    if verbose:
-        print(f"post url: {url} data: {data}")
-    try:
-        res = requests.post(f"http://localhost:8000/{url}", json=data, timeout=timeout)
-        if verbose:
-            print(f"post res: {res.json()}")
-        return res
-    except Exception as e:
-        print(f"post res: {e}")
-    return None
+
 
 
 class CtrlNode(_CtrlNode):
@@ -476,7 +462,8 @@ class Control(Node):
         self.odom_lock = threading.Lock()
         self._wp_raw = None
         self.yaw = None  # NED, 向北为正, 顺时针增加
-        self.planner_enable = True
+        self.planner_enable = self._get_param("planner_enable", True)
+        self.auto_planner_enable = self.planner_enable # 是否允许在停止检测后自动打开避障
 
         self.runner = Runner(
             node_list=[
@@ -494,6 +481,11 @@ class Control(Node):
             step_cb=self.step_cb,
         )
 
+    def register(self):
+        super().register()
+        self.do_ws_pub({"type": "state", "planner": self.planner_enable})
+    
+    
     def do_ws_pub(self, data):
         self.ws_pub.publish(json.dumps(data))
 
@@ -995,6 +987,7 @@ class Control(Node):
 
     @Node.route("/stop_follow", "POST")
     def stop_follow(self):
+        self.stop_planner() # 关闭避障
         self.runner.trigger(CEventType.STOP_FOLLOW)
         return SUCCESS_RESPONSE()
 
@@ -1057,7 +1050,9 @@ class Control(Node):
         return SUCCESS_RESPONSE()
 
     @Node.route("/start_planner", "POST")
-    def start_planner(self):
+    def start_planner(self, auto=False):
+        if auto and not self.auto_planner_enable:
+            return SUCCESS_RESPONSE("planner_enable=False时不允许自动打开避障")
         self.planner_enable = True
         self.ws_pub.publish(json.dumps({"type": "state", "planner": "enable"}))
         return SUCCESS_RESPONSE()

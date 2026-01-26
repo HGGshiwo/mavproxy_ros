@@ -1,4 +1,6 @@
 import time
+from typing import Dict, Optional
+import requests
 
 
 def SUCCESS_RESPONSE(msg="OK"):
@@ -41,3 +43,20 @@ class FPSHelper:
                 self.start = time.time()
                 # self.frame_cnt += 1
             return trigger
+
+
+def post_json(
+    url: str, data: Optional[Dict] = None, verbose: bool = True, timeout: float = 5
+):
+    if data is None:
+        data = {}
+    if verbose:
+        print(f"post url: {url} data: {data}")
+    try:
+        res = requests.post(f"http://localhost:8000/{url}", json=data, timeout=timeout)
+        if verbose:
+            print(f"post res: {res.json()}")
+        return res
+    except Exception as e:
+        print(f"post res: {e}")
+    return None

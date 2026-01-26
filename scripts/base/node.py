@@ -25,9 +25,12 @@ class Node:
         self.loop = None
         self.name = self.__class__.__name__.lower()
         rospy.init_node(self.name)
-        rospy.wait_for_service("/mavros/param/set", timeout=5)
-        rospy.wait_for_service("register", timeout=5)
-        rospy.wait_for_service("/mavros/param/pull", timeout=5)
+        try:
+            rospy.wait_for_service("/mavros/param/set", timeout=5)
+            rospy.wait_for_service("register", timeout=5)
+            rospy.wait_for_service("/mavros/param/pull", timeout=5)
+        except:
+            pass
         self.param_set_service = rospy.ServiceProxy("/mavros/param/set", ParamSet)
         self.register_service = rospy.ServiceProxy("register", Register)
         self.rc_override_pub = rospy.Publisher(
