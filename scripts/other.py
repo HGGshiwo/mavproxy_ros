@@ -9,6 +9,7 @@ from rsos_msgs.srv import StartBagRecord
 from std_srvs.srv import Trigger
 import json
 from rsos_msgs.srv import SetGimbalAngle, SetGimbalAngleResponse
+from rsos_msgs.srv import SetCameraExposure
 from mavros_msgs.msg import SysStatus
 
 class Other(Node):
@@ -87,6 +88,34 @@ class Other(Node):
         rospy.wait_for_service(service_name, timeout=5)
         srv = rospy.ServiceProxy(service_name, SetGimbalAngle)
         res = srv(mode=mode, angle=angle)
+        if not res.success:
+            return ERROR_RESPONSE(res.message)
+        return SUCCESS_RESPONSE(res.message)
+    
+    @Node.route("/get_exposure", "GET")
+    def get_exposure(self):
+        data = {
+            "shutter": {
+                "value": rospy.get_param("/UAV0/sensor/video11_camera/shutter", 50),
+                "max": rospy.get_param("/UAV0/sensor/video11_camera/shutter_max", 100),
+                "min": rospy.get_param("/UAV0/sensor/video11_camera/shutter_min", 0),
+                "step": rospy.get_param("/UAV0/sensor/video11_camera/shutter_step", 1)
+            },
+            "sensitivity": {
+                "value": rospy.get_param("/UAV0/sensor/video11_camera/ISO", 50),
+                "max": rospy.get_param("/UAV0/sensor/video11_camera/ISO_max", 100),
+                "min": rospy.get_param("/UAV0/sensor/video11_camera/ISO_min", 0),
+                "step": rospy.get_param("/UAV0/sensor/video11_camera/ISO_step", 1)
+            }
+        }
+        return SUCCESS_RESPONSE(data)
+    
+    @Node.route("/set_exposure", "POST")
+    def set_exposure(self, shutter: float, sensitivity: float):
+        service_name = " /UAV0/sensor/video11_camera/set_exposure"
+        rospy.wait_for_service(service_name, timeout=5)
+        srv = rospy.ServiceProxy(service_name, SetCameraExposure)
+        res = srv(shutter=shutter, sensitivity=sensitivity)
         if not res.success:
             return ERROR_RESPONSE(res.message)
         return SUCCESS_RESPONSE(res.message)

@@ -981,7 +981,7 @@ class Control(Node):
         radian = math.atan2(diff_y, diff_x)
         vx = v * math.cos(radian)
         vy = v * math.sin(radian)
-        vz = 0.2 * np.clip(diff_z, -0.5, 0.5)
+        vz = np.clip(-diff_z, -1, 1)
         self.do_send_cmd(vx=vx, vy=vy, vz=vz)
         return SUCCESS_RESPONSE()
 
