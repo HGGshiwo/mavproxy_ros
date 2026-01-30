@@ -112,7 +112,7 @@ class Other(Node):
     
     @Node.route("/set_exposure", "POST")
     def set_exposure(self, shutter: float, sensitivity: float):
-        service_name = " /UAV0/sensor/video11_camera/set_exposure"
+        service_name = "/UAV0/sensor/video11_camera/set_exposure"
         rospy.wait_for_service(service_name, timeout=5)
         srv = rospy.ServiceProxy(service_name, SetCameraExposure)
         res = srv(shutter=shutter, sensitivity=sensitivity)
