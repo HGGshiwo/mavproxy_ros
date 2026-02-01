@@ -1,1 +1,3 @@
 min_alt_threshold: 0.9
+param:
+  WPNAV_SPEED: 200
