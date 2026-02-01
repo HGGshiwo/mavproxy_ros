@@ -115,7 +115,7 @@ class Other(Node):
         service_name = "/UAV0/sensor/video11_camera/set_exposure"
         rospy.wait_for_service(service_name, timeout=5)
         srv = rospy.ServiceProxy(service_name, SetCameraExposure)
-        res = srv(shutter=shutter, sensitivity=sensitivity)
+        res = srv(shutter=int(shutter), sensitivity=int(sensitivity))
         if not res.success:
             return ERROR_RESPONSE(res.message)
         return SUCCESS_RESPONSE(res.message)
