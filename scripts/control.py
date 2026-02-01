@@ -401,9 +401,11 @@ class FollowNode(CtrlNode):
         context = self.context
         context.last_send = time.time()
         rospy.set_param("/UAV0/perception/yolo_detection/enable_detection", False)
+        rospy.set_param("/UAV0/perception/yolo_detection_smoke/enable_detection", False)
         rospy.set_param(
             "/UAV0/perception/object_location/object_location_node/enable_send", False
         )
+        
         node_before_detect = (
             NodeType.LIFTING
             if context.node_before_detect == NodeType.WP
