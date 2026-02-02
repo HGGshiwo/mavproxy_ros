@@ -59,9 +59,6 @@ class CEventType(EventType):
     STOP_FOLLOW = "stop_follow"
 
 
-
-
-
 class CtrlNode(_CtrlNode):
     land_enable = True
     detect_enable = False
@@ -154,9 +151,18 @@ class CtrlNode(_CtrlNode):
                 data = {"type": "smoke"}
             elif event["eventStatus"] == "off":
                 url = "stop_detect"
+        elif event_type == "gimbal":
+            url = "set_gimbal"
+            angle = event.get("eventParam", "25")
+            try:
+                angle = float(angle)
+            except Exception:
+                self.ws_pub.publish(json.dumps({"type": "error", "error": f"参数: {angle} 无法转为数字!"}))
+                return
+            data = {"mode": "body", "angle": angle}
 
         post_json(url, data)
-
+        
 
 class InitNode(CtrlNode):
     ground_enable = False
@@ -260,7 +266,7 @@ class LiftingNode(CtrlNode):
 
     def __init__(self):
         super().__init__(NodeType.LIFTING)
-
+        
     def enter(self):
         context = self.context
         context.lift_alt = context.waypoint[context.wp_idx][-1]
@@ -271,7 +277,12 @@ class LiftingNode(CtrlNode):
         odom = context.get_cur_odom()
         self.px = odom.pose.pose.position.x
         self.py = odom.pose.pose.position.y
-
+        
+        self.start_time = time.time()
+        
+        self.last_alt = context.rel_alt
+        self.last_yaw = context.yaw
+        
         try:
             context.lift_yaw = context.enu_xy2yaw(diff_x, diff_y)  # 这里是enu的yaw
         except:
@@ -286,7 +297,18 @@ class LiftingNode(CtrlNode):
             pz=context.lift_alt, px=self.px, py=self.py, yaw=context.lift_yaw
         )
         # context.do_send_cmd(yaw=context.lift_yaw)
-
+        yaw_diff = context.check_yaw(context.lift_yaw)
+        alt_diff = math.fabs(context.rel_alt - context.lift_alt)
+        context.ws_pub.publish(json.dumps({"type": "state", "lift_diff": f"yaw: {yaw_diff:.2f} alt: {alt_diff:.2f}"}))
+        if time.time() - self.start_time > 3: # 3s内移动太小，则退出
+            if math.fabs(self.last_alt - context.rel_alt) < 0.1 and math.fabs(self.last_yaw - context.yaw) < 0.1:
+                self.step(NodeType.WP)        
+            
+            self.last_yaw = context.yaw
+            self.last_alt = context.rel_alt
+            self.start_time = time.time()
+            
+        
     @CtrlNode.on(CEventType.LIFT_DONE)
     def lift_done_cb(self):
         time.sleep(1)  # 额外等待1秒完成高度调整
@@ -405,7 +427,7 @@ class FollowNode(CtrlNode):
         rospy.set_param(
             "/UAV0/perception/object_location/object_location_node/enable_send", False
         )
-        
+
         node_before_detect = (
             NodeType.LIFTING
             if context.node_before_detect == NodeType.WP
@@ -465,7 +487,7 @@ class Control(Node):
         self._wp_raw = None
         self.yaw = None  # NED, 向北为正, 顺时针增加
         self.planner_enable = self._get_param("planner_enable", True)
-        self.auto_planner_enable = self.planner_enable # 是否允许在停止检测后自动打开避障
+        self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
 
         self.runner = Runner(
             node_list=[
@@ -486,8 +508,10 @@ class Control(Node):
     def register(self):
         super().register()
         verison = rospy.get_param("/mavros/version", "No version")
-        self.do_ws_pub({"type": "state", "planner": self.planner_enable, "version": verison})
-    
+        self.do_ws_pub(
+            {"type": "state", "planner": self.planner_enable, "version": verison}
+        )
+
     def do_ws_pub(self, data):
         self.ws_pub.publish(json.dumps(data))
 
@@ -618,7 +642,10 @@ class Control(Node):
         self.takeoff_alt = alt
 
         if self.rel_alt > HOVER_THRESHOLD and self.arm == True:
-            self.do_send_cmd(pz=alt)
+            odom = self.get_cur_odom()
+            x = odom.pose.pose.position.x
+            y = odom.pose.pose.position.y
+            self.do_send_cmd(px=x, py=y, pz=alt)
         else:
             # 解锁
             out = self.prearm()["msg"]
@@ -756,7 +783,7 @@ class Control(Node):
         goal.pose.orientation.w = 1.0
         return goal
 
-    def get_cur_odom(self, t_cmd=None):
+    def get_cur_odom(self, t_cmd=None) -> Odometry:
         with self.odom_lock:
             if self.odom is None:
                 print("error: wait for odom")
@@ -876,7 +903,7 @@ class Control(Node):
             yaw_ned += 2 * math.pi
         if yaw_ned > 2 * math.pi:
             yaw_ned -= 2 * math.pi
-        return math.fabs(self.yaw - yaw_ned) < 0.1
+        return math.fabs(self.yaw - yaw_ned)
 
     def check_hover(self):
         """判断是否处于悬停状态"""
@@ -890,7 +917,7 @@ class Control(Node):
         if self.check_alt(self.takeoff_alt, TAKEOFF_THRESHOLD):
             self.runner.trigger(CEventType.TAKEOFF_DONE)
         if self.check_alt(self.lift_alt, TAKEOFF_THRESHOLD):
-            if self.lift_yaw is not None and self.check_yaw(self.lift_yaw):
+            if self.lift_yaw is not None and self.check_yaw(self.lift_yaw) < 0.1:
                 self.runner.trigger(CEventType.LIFT_DONE)
 
     @Node.ros("/mavros/sys_status", SysStatus)
@@ -989,7 +1016,7 @@ class Control(Node):
 
     @Node.route("/stop_follow", "POST")
     def stop_follow(self):
-        self.stop_planner() # 关闭避障
+        self.stop_planner()  # 关闭避障
         self.runner.trigger(CEventType.STOP_FOLLOW)
         return SUCCESS_RESPONSE()
 
