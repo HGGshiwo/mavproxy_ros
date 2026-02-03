@@ -274,9 +274,9 @@ class LiftingNode(CtrlNode):
             context.waypoint[context.wp_idx]
         )
 
-        odom = context.get_cur_odom()
-        self.px = odom.pose.pose.position.x
-        self.py = odom.pose.pose.position.y
+        # odom = context.get_cur_odom()
+        # self.px = odom.pose.pose.position.x
+        # self.py = odom.pose.pose.position.y
         
         self.start_time = time.time()
         
@@ -293,16 +293,24 @@ class LiftingNode(CtrlNode):
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
+        # context.do_send_cmd(
+        #     pz=context.lift_alt, px=self.px, py=self.py, yaw=context.lift_yaw
+        # )
+        
+        vz = np.clip(context.lift_alt - context.rel_alt, -1, 1)
         context.do_send_cmd(
-            pz=context.lift_alt, px=self.px, py=self.py, yaw=context.lift_yaw
+            vz=vz, vx=0, vy=0, yaw=context.lift_yaw
         )
+        
         # context.do_send_cmd(yaw=context.lift_yaw)
         yaw_diff = context.check_yaw(context.lift_yaw)
         alt_diff = math.fabs(context.rel_alt - context.lift_alt)
         context.ws_pub.publish(json.dumps({"type": "state", "lift_diff": f"yaw: {yaw_diff:.2f} alt: {alt_diff:.2f}"}))
         if time.time() - self.start_time > 3: # 3s内移动太小，则退出
             if math.fabs(self.last_alt - context.rel_alt) < 0.1 and math.fabs(self.last_yaw - context.yaw) < 0.1:
-                self.step(NodeType.WP)        
+                context.do_send_cmd(vx=0, vy=0, vz=0)
+                self.step(NodeType.WP)
+                        
             
             self.last_yaw = context.yaw
             self.last_alt = context.rel_alt
@@ -311,7 +319,10 @@ class LiftingNode(CtrlNode):
         
     @CtrlNode.on(CEventType.LIFT_DONE)
     def lift_done_cb(self):
-        time.sleep(1)  # 额外等待1秒完成高度调整
+        context = self.context
+        for i in range(10):
+            context.do_send_cmd(vx=0, vy=0, vz=0)
+            time.sleep(0.1)  # 额外等待1秒完成高度调整
         self.step(NodeType.WP)
 
 
