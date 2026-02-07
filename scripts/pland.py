@@ -2,16 +2,18 @@
 # -*- coding: utf-8 -*-
 
 import threading
+from typing import List, Optional
 from base.utils import FPSHelper
 from base.node import Node
 import numpy as np
-from pupil_apriltags import Detector
+from pupil_apriltags import Detection, Detector
 import cv2
-from mavros_msgs.msg import LandingTarget
 from sensor_msgs.msg import Image, CompressedImage, CameraInfo
+from geometry_msgs.msg import PointStamped
 import rospy
 from cv_bridge import CvBridge
 import math
+import numpy.typing as npt
 
 
 class Pland(Node):
@@ -20,7 +22,7 @@ class Pland(Node):
         super().__init__()
         self.detector = self.create_detector()
         self.landing_target_pub = rospy.Publisher(
-            "/mavros/landing_target/raw", LandingTarget, queue_size=10
+            "/mavproxy/landing_target", PointStamped, queue_size=10
         )
         self.detect_res_pub = rospy.Publisher(
             "/pland_camera/result", Image, queue_size=10
@@ -32,7 +34,7 @@ class Pland(Node):
         self.detect_lock = threading.Lock()
         self.init_done = True
         print("pland init done")
-        
+
     def create_detector(self):
         tag_type = self._get_param("tag_type", "tagCustom48h12")
         print("load detector")
@@ -48,19 +50,24 @@ class Pland(Node):
         print("load done")
         return det
 
-    def detect_artag(self, detector, frame, return_frame=True):
+    def detect_artag(
+        self,
+        detector: Detector,
+        frame: npt.NDArray,
+        return_frame: Optional[bool] = True,
+    ):
         tag_id = self._get_param("tag_id", 0)
         if detector is None:
             return None if not return_frame else (frame, None)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         with self.detect_lock:
-            tags = detector.detect(gray)
-        
+            tags: List[Detection] = detector.detect(gray)
+
         # return frame, None
         if len(tags) == 0:
             return None if not return_frame else (frame, None)
         tag = [t for t in tags if t.tag_id == tag_id][0]
-        points = tag.corners.astype(int)  # 只用第一个二维码
+        points = tag.center.astype(int)  # 只用第一个二维码
         if not return_frame:
             return points
 
@@ -87,7 +94,11 @@ class Pland(Node):
         )
         return frame, points
 
-    def artag2xy(self, detector, frame, fov_x=None, fov_y=None):
+    def artag2xy(
+        self,
+        detector: Detector,
+        frame: npt.NDArray,
+    ):
         # 创建二维码检测器
         frame, points = self.detect_artag(detector, frame, return_frame=True)
         res = self.bridge.cv2_to_imgmsg(frame, "bgr8")
@@ -96,17 +107,14 @@ class Pland(Node):
         if points is None:
             return None
 
-        qr_center = points.mean(axis=0)
+        qr_center = points
         height, width = frame.shape[:2]
         img_center = np.array([width / 2, height / 2])
         delta = (qr_center - img_center) / img_center
-        fov_xy = np.array([fov_x, fov_y])
-        fov_xy = np.radians(fov_xy)
-        angle = delta * (fov_xy / 2)
-        return [float(angle[0]), float(angle[1])]  # 返回角度, 单位弧度
+        return delta
 
     # topic 在launch中修改
-    def _pland_cb(self, frame: np.ndarray):
+    def _pland_cb(self, frame: npt.NDArray):
         if not self.init_done:
             return
         with self.info_lock:
@@ -118,9 +126,10 @@ class Pland(Node):
             else:
                 camera_fov_x = self.camera_fov_xy[0]
                 camera_fov_y = self.camera_fov_xy[1]
-        xy = self.artag2xy(self.detector, frame, camera_fov_x, camera_fov_y)
+        xy = self.artag2xy(self.detector, frame)
         if xy is None:
             return
+
         self.set_landing_target(xy[0], xy[1])
 
     @Node.ros("/pland_camera/image_raw", Image)
@@ -130,6 +139,7 @@ class Pland(Node):
             return self._pland_cb(frame)
         except Exception:
             import traceback
+
             traceback.print_exc()
 
     @Node.ros("/pland_camera/compressed", CompressedImage)
@@ -139,6 +149,7 @@ class Pland(Node):
             return self._pland_cb(frame)
         except Exception:
             import traceback
+
             traceback.print_exc()
 
     @Node.ros("/UAV0/sensor/video11_camera/cam_info", CameraInfo)
@@ -175,38 +186,28 @@ class Pland(Node):
                 self.camera_fov_xy = [fov_x_deg, fov_y_deg]
         except Exception:
             import traceback
+
             traceback.print_exc()
 
-    def set_landing_target(self, angle_x, angle_y):
+    def set_landing_target(self, delta_x: float, delta_y: float):
         """
         设置着陆目标
-        :param angle_x: 目标角度 X (弧度)
-        :param angle_y: 目标角度 Y (弧度)
+
+        :param delta_x: 相机坐标系 X
+        :param delta_x: 相机坐标系 Y
         """
-        landing_target = LandingTarget()
+        landing_target = PointStamped()
 
         # 时间戳（微秒）
         landing_target.header.stamp = rospy.Time.now()
-        landing_target.header.frame_id = "map"
 
-        # 目标ID
-        landing_target.target_num = 0
-        landing_target.frame = 12  # MAV_FRAME_BODY_FRD
-        landing_target.type = LandingTarget.VISION_FIDUCIAL
-
-        # 目标角度（弧度）
-        landing_target.angle = [angle_x, angle_y]
-
-        # 距离（米）
-        landing_target.distance = 0.0
+        landing_target.point.x = delta_x
+        landing_target.point.y = delta_y
 
         # 发布消息
         self.landing_target_pub.publish(landing_target)
-        # rospy.loginfo(f"发送着陆目标: angle_x={angle_x}, angle_y={angle_y}")
         if self.fps_helper.step(block=False):
-            rospy.loginfo(
-                f"FPS:{self.fps_helper.fps} 发送着陆目标: angle_x={angle_x}, angle_y={angle_y} fov: {self.camera_fov_xy}"
-            )
+            rospy.loginfo(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
 
 
 if __name__ == "__main__":

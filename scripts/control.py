@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+from typing import Any, List, Optional
 
 from base.ctrl_node import Runner
 import rospy
@@ -27,7 +28,9 @@ from visualization_msgs.msg import Marker
 from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
 from tf.transformations import euler_from_quaternion
-
+from geometry_msgs.msg import Point
+from sensor_msgs.msg import Range
+from mavros_msgs.msg import RCIn
 
 STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.05  # 高度判断阈值(比例)
@@ -87,7 +90,7 @@ class CtrlNode(_CtrlNode):
 
     def land_cb(self):
         print("set land")
-        self.context.do_land()
+        # self.context.do_land()
         self.step(NodeType.LANDING)
         post_json("stop_record")
 
@@ -157,12 +160,14 @@ class CtrlNode(_CtrlNode):
             try:
                 angle = float(angle)
             except Exception:
-                self.ws_pub.publish(json.dumps({"type": "error", "error": f"参数: {angle} 无法转为数字!"}))
+                self.ws_pub.publish(
+                    json.dumps({"type": "error", "error": f"参数: {angle} 无法转为数字!"})
+                )
                 return
             data = {"mode": "body", "angle": angle}
 
         post_json(url, data)
-        
+
 
 class InitNode(CtrlNode):
     ground_enable = False
@@ -266,7 +271,7 @@ class LiftingNode(CtrlNode):
 
     def __init__(self):
         super().__init__(NodeType.LIFTING)
-        
+
     def enter(self):
         context = self.context
         context.lift_alt = context.waypoint[context.wp_idx][-1]
@@ -277,12 +282,12 @@ class LiftingNode(CtrlNode):
         # odom = context.get_cur_odom()
         # self.px = odom.pose.pose.position.x
         # self.py = odom.pose.pose.position.y
-        
+
         self.start_time = time.time()
-        
+
         self.last_alt = context.rel_alt
         self.last_yaw = context.yaw
-        
+
         try:
             context.lift_yaw = context.enu_xy2yaw(diff_x, diff_y)  # 这里是enu的yaw
         except:
@@ -296,32 +301,38 @@ class LiftingNode(CtrlNode):
         # context.do_send_cmd(
         #     pz=context.lift_alt, px=self.px, py=self.py, yaw=context.lift_yaw
         # )
-        
+
         vz = np.clip(context.lift_alt - context.rel_alt, -1, 1)
-        context.do_send_cmd(
-            vz=vz, vx=0, vy=0, yaw=context.lift_yaw
-        )
-        
+        context.do_send_cmd(v=[0, 0, vz], yaw=context.lift_yaw)
+
         # context.do_send_cmd(yaw=context.lift_yaw)
         yaw_diff = context.check_yaw(context.lift_yaw)
         alt_diff = math.fabs(context.rel_alt - context.lift_alt)
-        context.ws_pub.publish(json.dumps({"type": "state", "lift_diff": f"yaw: {yaw_diff:.2f} alt: {alt_diff:.2f}"}))
-        if time.time() - self.start_time > 3: # 3s内移动太小，则退出
-            if math.fabs(self.last_alt - context.rel_alt) < 0.1 and math.fabs(self.last_yaw - context.yaw) < 0.1:
-                context.do_send_cmd(vx=0, vy=0, vz=0)
+        context.ws_pub.publish(
+            json.dumps(
+                {
+                    "type": "state",
+                    "lift_diff": f"yaw: {yaw_diff:.2f} alt: {alt_diff:.2f}",
+                }
+            )
+        )
+        if time.time() - self.start_time > 3:  # 3s内移动太小，则退出
+            if (
+                math.fabs(self.last_alt - context.rel_alt) < 0.1
+                and math.fabs(self.last_yaw - context.yaw) < 0.1
+            ):
+                context.do_send_cmd(v=[0, 0, 0])
                 self.step(NodeType.WP)
-                        
-            
+
             self.last_yaw = context.yaw
             self.last_alt = context.rel_alt
             self.start_time = time.time()
-            
-        
+
     @CtrlNode.on(CEventType.LIFT_DONE)
     def lift_done_cb(self):
         context = self.context
         for i in range(10):
-            context.do_send_cmd(vx=0, vy=0, vz=0)
+            context.do_send_cmd(v=[0, 0, 0])
             time.sleep(0.1)  # 额外等待1秒完成高度调整
         self.step(NodeType.WP)
 
@@ -347,7 +358,7 @@ class WpNode(CtrlNode):
             context.wp_pub.publish(goal)
         else:
             context.stop_pub.publish(Empty())
-            context.do_send_cmd(px=px, py=py, pz=pz)
+            context.do_send_cmd(p=[px, py, pz])
 
         if context.nodeEventList is not None:
             event_list = context.nodeEventList[context.wp_idx]
@@ -408,6 +419,11 @@ class WpNode(CtrlNode):
             self.step(NodeType.LIFTING)
 
 
+MAX_X_SPEED = 1
+MAX_Y_SPEED = 1
+MAX_Z_SPEED = 1
+
+
 class LandNode(CtrlNode):
     takeoff_enable = True
     wp_enable = True
@@ -419,8 +435,64 @@ class LandNode(CtrlNode):
     def enter(self):
         context = self.context
         post_json("set_gimbal", {"mode": "body", "angle": 90})
-        context.do_land()
+        if not context.pland_enable:
+            context.do_land()
         post_json("stop_record")
+
+    def _get_rc_speed(self, context):
+        if context.rc_channel is None:
+            return None
+        stamp, rc_channels = context.rc_channel
+        time_jump = math.fabs((rospy.Time.now() - stamp).to_sec())
+        if time_jump < 0.05:  # 响应遥控器的输入
+            if rc_channels[0] == 1500 and rc_channels[1] ==  1500: # 遥控器无输入
+                return None
+            vy = ((rc_channels[0] - 1500) / 500) * MAX_Y_SPEED
+            vy = np.clip(vy, -MAX_Y_SPEED, MAX_Y_SPEED)
+
+            vx = ((rc_channels[1] - 1500) / 500) * MAX_X_SPEED
+            vx = np.clip(vx, -MAX_X_SPEED, MAX_X_SPEED)
+
+            return vx, vy, 0
+
+    def _get_landing_speed(self, context):
+        landing_target = copy.deepcopy(context.landing_target)
+        timestamp, x, y = landing_target
+        time_jump = math.fabs((rospy.Time.now() - timestamp).to_sec())
+        if time_jump > 0.05:  # 20hz
+            print(f"target too old: {time_jump:.3f} > 0.05s, ignore")
+            return None
+        vz = 0
+        z_err = np.sqrt(x * x + y * y)
+        if z_err < 0.1:  # 误差足够小，允许下降
+            if context.rangefinder_alt is None:
+                print("no rangefinder data found, ignore")
+                return
+            vz = np.clip(-context.rangefinder_alt, -1, 1)
+
+        vx = np.clip(-y, -1, 1)
+        vy = np.clip(-x, -1, 1)
+        return vx, vy, vz
+
+    @CtrlNode.on(CEventType.IDLE)
+    def idle_cb(self):
+        context = self.context
+        if not context.pland_enable:
+            return
+        if context.rangefinder_alt < 1e-3:
+            print(f"land done, alt: {context.rangefinder_alt}")
+            self.step(NodeType.GROUND)
+            return
+        if context.landing_target is None:
+            return
+        v_xyz = self._get_rc_speed(context)
+        if v_xyz is None:
+            v_xyz = self._get_landing_speed(context)
+        if v_xyz is None:
+            return
+        vx, vy, vz = v_xyz
+        print(vx, vy, vz)
+        context.do_send_cmd(v=[vx, vy, vz], frame=PositionTarget.FRAME_BODY_OFFSET_NED)
 
 
 class FollowNode(CtrlNode):
@@ -499,6 +571,13 @@ class Control(Node):
         self.yaw = None  # NED, 向北为正, 顺时针增加
         self.planner_enable = self._get_param("planner_enable", True)
         self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
+        self.pland_enable = self._get_param("pland_enable", default=True)  # 是否进行精准降落
+
+        self.rangefinder_alt = None  # 测距仪高度
+        self.rc_channel = None  # 遥控器输入
+
+        # 精准降落
+        self.landing_target = None
 
         self.runner = Runner(
             node_list=[
@@ -556,54 +635,46 @@ class Control(Node):
     def do_send_cmd(
         self,
         *,
-        px=None,
-        py=None,
-        pz=None,
-        vx=None,
-        vy=None,
-        vz=None,
-        ax=None,
-        ay=None,
-        az=None,
-        yaw=None,
-        yaw_rate=None,
+        p: Optional[List[float]] = None,
+        v: Optional[List[float]] = None,
+        a: Optional[List[float]] = None,
+        yaw: Optional[float] = None,
+        yaw_rate: Optional[float] = None,
+        frame: Any = PositionTarget.FRAME_LOCAL_NED,
     ):
         target = PositionTarget()
         target.header.stamp = rospy.Time.now()
         target.header.frame_id = "local_ned"
 
         # 坐标系选择
-        target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+        target.coordinate_frame = frame
         type_mask = 0
         ctrl_data = []
-        for data, ignore in zip(
-            [px, py, pz, vx, vy, vz, ax, ay, az, yaw, yaw_rate],
-            [
-                "PX",
-                "PY",
-                "PZ",
-                "VX",
-                "VY",
-                "VZ",
-                "AFX",
-                "AFY",
-                "AFZ",
-                "YAW",
-                "YAW_RATE",
-            ],
-        ):
-            # 类型掩码：使用位置+速度
-            if data is None:
-                type_mask = type_mask | getattr(PositionTarget, f"IGNORE_{ignore}")
-                data = 0
-            ctrl_data.append(data)
+        if p is None:
+            for key in ["PX", "PY", "PZ"]:
+                type_mask = type_mask | getattr(PositionTarget, f"IGNORE_{key}")
+                p = [0, 0, 0]
+        if v is None:
+            for key in ["VX", "VY", "VZ"]:
+                type_mask = type_mask | getattr(PositionTarget, f"IGNORE_{key}")
+                v = [0, 0, 0]
+        if a is None:
+            for key in ["AFX", "AFY", "AFZ"]:
+                type_mask = type_mask | getattr(PositionTarget, f"IGNORE_{key}")
+                a = [0, 0, 0]
+        if yaw is None:
+            type_mask = type_mask | PositionTarget.IGNORE_YAW
+            yaw = 0
+        if yaw_rate is None:
+            type_mask = type_mask | PositionTarget.IGNORE_YAW_RATE
+            yaw_rate = 0
 
         # 设置值
-        target.position = Vector3(*ctrl_data[0:3])
-        target.velocity = Vector3(*ctrl_data[3:6])
-        target.acceleration_or_force = Vector3(*ctrl_data[6:9])
-        target.yaw = ctrl_data[9]
-        target.yaw_rate = ctrl_data[10]
+        target.position = Vector3(*p)
+        target.velocity = Vector3(*v)
+        target.acceleration_or_force = Vector3(*a)
+        target.yaw = yaw
+        target.yaw_rate = yaw_rate
         target.type_mask = type_mask
         # 发布
         self.setpoint_pub.publish(target)
@@ -656,7 +727,7 @@ class Control(Node):
             odom = self.get_cur_odom()
             x = odom.pose.pose.position.x
             y = odom.pose.pose.position.y
-            self.do_send_cmd(px=x, py=y, pz=alt)
+            self.do_send_cmd(p=[x, y, alt])
         else:
             # 解锁
             out = self.prearm()["msg"]
@@ -920,6 +991,13 @@ class Control(Node):
         """判断是否处于悬停状态"""
         return self.arm == True and self.rel_alt >= HOVER_THRESHOLD
 
+    @Node.ros("/mavros/rc/in", RCIn)
+    def rcin_cb(self, msg: RCIn):
+        channels = list(msg.channels)
+        while len(channels) < 18:
+            channels.append(1500)
+        self.rc_channel = (msg.header.stamp, channels)
+
     @Node.ros("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
@@ -982,17 +1060,19 @@ class Control(Node):
         if not self.planner_enable:
             return
         self.do_send_cmd(
-            px=msg.position.x,
-            py=msg.position.y,
-            pz=msg.position.z,
-            vx=msg.velocity.x,
-            vy=msg.velocity.y,
-            vz=msg.velocity.z,
-            ax=msg.acceleration.x,
-            ay=msg.acceleration.y,
-            az=msg.acceleration.z,
+            p=[msg.position.x, msg.position.y, msg.position.z],
+            v=[msg.velocity.x, msg.velocity.y, msg.velocity.z],
+            a=[msg.acceleration.x, msg.acceleration.y, msg.acceleration.z],
             yaw=msg.yaw,
         )
+
+    @Node.ros("/mavproxy/landing_target", PointStamped)
+    def landing_target_cb(self, msg: PointStamped):
+        self.landing_target = (msg.header.stamp, msg.point.x, msg.point.y)
+
+    @Node.ros("/mavros/distance_sensor/rangefinder_pub", Range)
+    def rangefinder_cb(self, msg: Range):
+        self.rangefinder_alt = msg.range
 
     @Node.route("/get_gpsv2", "GET")
     def get_gpsv2(self):
@@ -1022,7 +1102,7 @@ class Control(Node):
         vx = v * math.cos(radian)
         vy = v * math.sin(radian)
         vz = np.clip(-diff_z, -1, 1)
-        self.do_send_cmd(vx=vx, vy=vy, vz=vz)
+        self.do_send_cmd(v=[vx, vy, vz])
         return SUCCESS_RESPONSE()
 
     @Node.route("/stop_follow", "POST")
@@ -1100,6 +1180,22 @@ class Control(Node):
     @Node.route("/get_planner", "GET")
     def get_planner(self):
         return SUCCESS_RESPONSE(msg=self.planner_enable)
+
+    @Node.route("/get_pland", "GET")
+    def get_pland(self):
+        return SUCCESS_RESPONSE(msg=self.pland_enable)
+
+    @Node.route("/stop_pland", "POST")
+    def stop_pland(self):
+        self.pland_enable = False
+        self.ws_pub.publish(json.dumps({"type": "state", "pland": "disable"}))
+        return SUCCESS_RESPONSE()
+
+    @Node.route("/start_pland", "POST")
+    def start_pland(self):
+        self.pland_enable = True
+        self.ws_pub.publish(json.dumps({"type": "state", "pland": "enable"}))
+        return SUCCESS_RESPONSE()
 
     @Node.route("/arm", "POST")
     def do_arm(self):
