@@ -2,12 +2,17 @@
 # -*- coding: utf-8 -*-
 
 import threading
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from base.utils import FPSHelper
 from base.node import Node
 import numpy as np
 from pupil_apriltags import Detection, Detector
 import cv2
+
+from event_callback.utils import rosparam_field
+from event_callback import ros
+from event_callback.utils import ROSProxy
+from event_callback.core import CallbackManager, CallbackMixin
 from sensor_msgs.msg import Image, CompressedImage, CameraInfo
 from geometry_msgs.msg import PointStamped
 import rospy
@@ -16,30 +21,34 @@ import math
 import numpy.typing as npt
 
 
-class Pland(Node):
-    def __init__(self):
-        self.init_done = False
-        super().__init__()
-        self.detector = self.create_detector()
-        self.landing_target_pub = rospy.Publisher(
-            "/mavproxy/landing_target", PointStamped, queue_size=10
-        )
-        self.detect_res_pub = rospy.Publisher(
-            "/pland_camera/result", Image, queue_size=10
-        )
+class Pland(CallbackManager, ROSProxy):
+    def __init__(
+        self,
+        component_config: Optional[Dict[str, Any]] = None,
+        mixins: List[CallbackMixin] = None,
+    ):
+        super().__init__(component_config, mixins)
         self.bridge = CvBridge()
         self.fps_helper = FPSHelper(fps=1)
         self.camera_fov_xy = None
         self.info_lock = threading.Lock()
         self.detect_lock = threading.Lock()
-        self.init_done = True
+
+        self.tag_id = rosparam_field("tag_id", 0)
+        self.tag_type = rosparam_field("tag_type", "tagCustom48h12")
+
+        self.detector = self._create_detector()
+
+        # fmt: off
+        self.landing_target_pub = rospy.Publisher("/mavproxy/landing_target", PointStamped, queue_size=10)
+        self.detect_res_pub = rospy.Publisher("/pland_camera/result", Image, queue_size=10)
+        # fmt: on
         print("pland init done")
 
-    def create_detector(self):
-        tag_type = self._get_param("tag_type", "tagCustom48h12")
+    def _create_detector(self):
         print("load detector")
         det = Detector(
-            families=tag_type,
+            families=self.tag_type,
             nthreads=1,
             quad_decimate=1.0,
             quad_sigma=0.0,
@@ -50,13 +59,12 @@ class Pland(Node):
         print("load done")
         return det
 
-    def detect_artag(
+    def _detect_artag(
         self,
         detector: Detector,
         frame: npt.NDArray,
         return_frame: Optional[bool] = True,
     ):
-        tag_id = self._get_param("tag_id", 0)
         if detector is None:
             return None if not return_frame else (frame, None)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -66,7 +74,7 @@ class Pland(Node):
         # return frame, None
         if len(tags) == 0:
             return None if not return_frame else (frame, None)
-        tag = [t for t in tags if t.tag_id == tag_id][0]
+        tag = [t for t in tags if t.tag_id == self.tag_id][0]
         points = tag.center.astype(int)  # 只用第一个二维码
         if not return_frame:
             return points
@@ -94,13 +102,13 @@ class Pland(Node):
         )
         return frame, points
 
-    def artag2xy(
+    def _artag2xy(
         self,
         detector: Detector,
         frame: npt.NDArray,
     ):
         # 创建二维码检测器
-        frame, points = self.detect_artag(detector, frame, return_frame=True)
+        frame, points = self._detect_artag(detector, frame, return_frame=True)
         res = self.bridge.cv2_to_imgmsg(frame, "bgr8")
         self.detect_res_pub.publish(res)
 
@@ -113,10 +121,7 @@ class Pland(Node):
         delta = (qr_center - img_center) / img_center
         return delta
 
-    # topic 在launch中修改
     def _pland_cb(self, frame: npt.NDArray):
-        if not self.init_done:
-            return
         with self.info_lock:
             if self.camera_fov_xy is None:
                 rospy.logwarn("No camera info received!, skip")
@@ -126,13 +131,34 @@ class Pland(Node):
             else:
                 camera_fov_x = self.camera_fov_xy[0]
                 camera_fov_y = self.camera_fov_xy[1]
-        xy = self.artag2xy(self.detector, frame)
+        xy = self._artag2xy(self.detector, frame)
         if xy is None:
             return
 
-        self.set_landing_target(xy[0], xy[1])
+        self._set_landing_target(xy[0], xy[1])
 
-    @Node.ros("/pland_camera/image_raw", Image)
+    def _set_landing_target(self, delta_x: float, delta_y: float):
+        """
+        设置着陆目标
+
+        :param delta_x: 相机坐标系 X
+        :param delta_x: 相机坐标系 Y
+        """
+        landing_target = PointStamped()
+
+        # 时间戳（微秒）
+        landing_target.header.stamp = rospy.Time.now()
+
+        landing_target.point.x = delta_x
+        landing_target.point.y = delta_y
+
+        # 发布消息
+        self.landing_target_pub.publish(landing_target)
+        if self.fps_helper.step(block=False):
+            rospy.loginfo(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
+
+    # topic 在launch中修改
+    @ros.topic("/pland_camera/image_raw", Image)
     def pland_cb(self, frame: Image):
         try:
             frame = self.bridge.imgmsg_to_cv2(frame, desired_encoding="bgr8")
@@ -142,7 +168,7 @@ class Pland(Node):
 
             traceback.print_exc()
 
-    @Node.ros("/pland_camera/compressed", CompressedImage)
+    @ros.topic("/pland_camera/compressed", CompressedImage)
     def pland_cb2(self, frame: CompressedImage):
         try:
             frame = self.bridge.compressed_imgmsg_to_cv2(frame, desired_encoding="bgr8")
@@ -152,7 +178,7 @@ class Pland(Node):
 
             traceback.print_exc()
 
-    @Node.ros("/UAV0/sensor/video11_camera/cam_info", CameraInfo)
+    @ros.topic("/UAV0/sensor/video11_camera/cam_info", CameraInfo)
     def camera_info_cb(self, camera_info_msg: CameraInfo):
         """
         从camera_info消息计算水平和垂直FOV（单位：度）
@@ -189,27 +215,7 @@ class Pland(Node):
 
             traceback.print_exc()
 
-    def set_landing_target(self, delta_x: float, delta_y: float):
-        """
-        设置着陆目标
-
-        :param delta_x: 相机坐标系 X
-        :param delta_x: 相机坐标系 Y
-        """
-        landing_target = PointStamped()
-
-        # 时间戳（微秒）
-        landing_target.header.stamp = rospy.Time.now()
-
-        landing_target.point.x = delta_x
-        landing_target.point.y = delta_y
-
-        # 发布消息
-        self.landing_target_pub.publish(landing_target)
-        if self.fps_helper.step(block=False):
-            rospy.loginfo(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
-
 
 if __name__ == "__main__":
     pland = Pland()
-    pland.run()
+    rospy.spin()

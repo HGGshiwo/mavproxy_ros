@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 from base.node import SUCCESS_RESPONSE, Node
+from event_callback.core import CallbackManager
 from mavros_msgs.srv import ParamPull, ParamGet
 from base.utils import ERROR_RESPONSE
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from event_callback import http_proxy, ros
+from control_model import *
 from typing import Any
 import rospy
 import rospkg
@@ -19,7 +21,7 @@ def parse_param(param):
     return 0
 
 
-class Param(Node):
+class Param(CallbackManager):
     def __init__(self):
         super().__init__()
         rospy.wait_for_service("/mavros/param/pull")
@@ -48,12 +50,12 @@ class Param(Node):
             params[name] = {"default": default, "help": help_text}
         return params
 
-    @Node.route("/set_param", "POST")
-    def set_param(self, name: str, value: Any):
-        super()._set_param(name, value)
+    @http_proxy.post("/set_param")
+    def set_param(self, data: SetParamModel):
+        rospy.set_param(data.name, data.value)
         return SUCCESS_RESPONSE("OK")
 
-    @Node.route("/params", "GET")
+    @http_proxy.get("/params")
     def get_params(self):
         param_pull = rospy.ServiceProxy("/mavros/param/pull", ParamPull)
         self.param_num = 0
@@ -73,4 +75,4 @@ class Param(Node):
 
 if __name__ == "__main__":
     node = Param()
-    node.run()
+    rospy.spin()

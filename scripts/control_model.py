@@ -1,0 +1,39 @@
+from typing import Any
+from pydantic import BaseModel
+
+
+class SetModeModel(BaseModel):
+    mode: str
+
+
+class TakeoffModel(BaseModel):
+    alt: float
+
+
+# Other
+class StartRecordModel(BaseModel):
+    bag_name: str
+
+
+class SetRosParamModel(BaseModel):
+    name: str
+    value: Any
+
+
+class SetGimbalModel(BaseModel):
+    mode: str
+    angle: float
+
+
+class SetExposureModel(BaseModel):
+    shutter: float
+    sensitivity: float
+
+
+class StartDetectModel(BaseModel):
+    type: str = "smoke"
+
+# Param
+class SetParamModel(BaseModel):
+    name: str
+    value: Any

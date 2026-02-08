@@ -4,6 +4,10 @@ from __future__ import annotations
 from typing import Any, List, Optional
 
 from base.ctrl_node import Runner
+from event_callback import ros, http_proxy
+from event_callback.core import CallbackManager
+from event_callback.utils import ROSProxy, rosparam_field
+from control_model import *
 import rospy
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong
 from mavros_msgs.msg import PositionTarget, SysStatus, StatusText, HomePosition
@@ -19,16 +23,14 @@ import threading
 from pyproj import CRS, Transformer
 import copy
 import numpy as np
-from base.utils import ERROR_RESPONSE, SUCCESS_RESPONSE, post_json
-from base.node import Node
+from base.utils import SUCCESS_RESPONSE, post_json
 import time
 import math
 from mavros_msgs.msg import State
 from visualization_msgs.msg import Marker
 from enum import Enum
-from base.ctrl_node import CtrlNode as _CtrlNode, EventType, Event
+from base.ctrl_node import CtrlNode as _CtrlNode, EventType
 from tf.transformations import euler_from_quaternion
-from geometry_msgs.msg import Point
 from sensor_msgs.msg import Range
 from mavros_msgs.msg import RCIn
 
@@ -312,7 +314,8 @@ class LiftingNode(CtrlNode):
             json.dumps(
                 {
                     "type": "state",
-                    "lift_diff": f"yaw: {yaw_diff:.2f} alt: {alt_diff:.2f}",
+                    "yaw_diff": f"{yaw_diff:.2f}",
+                    "alt_diff": f"{alt_diff:.2f}",
                 }
             )
         )
@@ -445,7 +448,7 @@ class LandNode(CtrlNode):
         stamp, rc_channels = context.rc_channel
         time_jump = math.fabs((rospy.Time.now() - stamp).to_sec())
         if time_jump < 0.05:  # 响应遥控器的输入
-            if rc_channels[0] == 1500 and rc_channels[1] ==  1500: # 遥控器无输入
+            if rc_channels[0] == 1500 and rc_channels[1] == 1500:  # 遥控器无输入
                 return None
             vy = ((rc_channels[0] - 1500) / 500) * MAX_Y_SPEED
             vy = np.clip(vy, -MAX_Y_SPEED, MAX_Y_SPEED)
@@ -519,29 +522,9 @@ class FollowNode(CtrlNode):
         self.step(node_before_detect)
 
 
-class Control(Node):
-    def __init__(self):
-        super().__init__()
-        rospy.loginfo("wait for mavros service...")
-        rospy.wait_for_service("/mavros/cmd/arming")
-        rospy.wait_for_service("/mavros/set_mode")
-        rospy.wait_for_service("/mavros/cmd/takeoff")
-        rospy.loginfo("control done")
-        self.takeoff_srv = rospy.ServiceProxy("/mavros/cmd/takeoff", CommandTOL)
-        self.arm_service = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
-        self.set_mode_service = rospy.ServiceProxy("/mavros/set_mode", SetMode)
-        self.cmd_service = rospy.ServiceProxy("/mavros/cmd/command", CommandLong)
-        self.wp_pub = rospy.Publisher(
-            "/move_base_simple/goal2", PoseStamped, queue_size=-1
-        )
-        self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=-1)
-        self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
-        self.setpoint_pub = rospy.Publisher(
-            "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
-        )
-        self.target_pub = rospy.Publisher(
-            "/UAV0/perception/object_location/obj_lla", PointStamped, queue_size=1
-        )
+class Control(CallbackManager, ROSProxy):
+    def __init__(self, component_config=None, mixins=None):
+        super().__init__(component_config, mixins)
 
         self.send_time = 0
 
@@ -562,16 +545,20 @@ class Control(Node):
         self.arm = False
         self.mode = "UNKNOWN"
         self.odom = None
+        # 融合经纬度
         self.lat = 0
         self.lon = 0
+
+        # gps经纬度
+        self.gps_lat = 0
+        self.gps_lon = 0
+        self.gps_alt = 0
+
         self.land = False
         self.speed = 0
         self.odom_lock = threading.Lock()
         self._wp_raw = None
         self.yaw = None  # NED, 向北为正, 顺时针增加
-        self.planner_enable = self._get_param("planner_enable", True)
-        self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
-        self.pland_enable = self._get_param("pland_enable", default=True)  # 是否进行精准降落
 
         self.rangefinder_alt = None  # 测距仪高度
         self.rc_channel = None  # 遥控器输入
@@ -595,12 +582,37 @@ class Control(Node):
             step_cb=self.step_cb,
         )
 
-    def register(self):
-        super().register()
+        rospy.loginfo("wait for mavros service...")
+        rospy.wait_for_service("/mavros/cmd/arming", timeout=5)
+        rospy.wait_for_service("/mavros/set_mode", timeout=5)
+        rospy.wait_for_service("/mavros/cmd/takeoff", timeout=5)
+        rospy.loginfo("control done")
+        self.takeoff_srv = rospy.ServiceProxy("/mavros/cmd/takeoff", CommandTOL)
+        self.arm_service = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
+        self.set_mode_service = rospy.ServiceProxy("/mavros/set_mode", SetMode)
+        self.cmd_service = rospy.ServiceProxy("/mavros/cmd/command", CommandLong)
+        self.wp_pub = rospy.Publisher(
+            "/move_base_simple/goal2", PoseStamped, queue_size=-1
+        )
+        self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=-1)
+        self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
+        self.setpoint_pub = rospy.Publisher(
+            "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
+        )
+        self.target_pub = rospy.Publisher(
+            "/UAV0/perception/object_location/obj_lla", PointStamped, queue_size=1
+        )
+
+        self.planner_enable = rosparam_field("planner_enable", True)
+        self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
+        self.pland_enable = rosparam_field("pland_enable", default=True)  # 是否进行精准降落
+        self.min_alt_threshold = rosparam_field("min_alt_threshold", 0.5)
+
         verison = rospy.get_param("/mavros/version", "No version")
         self.do_ws_pub(
             {"type": "state", "planner": self.planner_enable, "version": verison}
         )
+        self.do_ws_pub({"type": "state", "state": self.runner.node.type.value})
 
     def do_ws_pub(self, data):
         self.ws_pub.publish(json.dumps(data))
@@ -893,30 +905,30 @@ class Control(Node):
                 raise ValueError(self.state)
             rate.sleep()
 
-    @Node.ros("/mavros/home_position/home", HomePosition)
-    def home_callback(self, msg):
+    @ros.topic("/mavros/home_position/home", HomePosition)
+    def home_callback(self, msg: HomePosition):
         if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
             self.takeoff_lat = msg.geo.latitude
             self.takeoff_lon = msg.geo.longitude
             self.takeoff_alt = msg.geo.altitude
             print(f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}")
 
-    @Node.ros("/mavros/global_position/global", NavSatFix)
+    @ros.topic("/mavros/global_position/global", NavSatFix)
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
         self.lon = data.longitude
 
-    @Node.ros("/mavros/global_position/raw/fix", NavSatFix)
+    @ros.topic("/mavros/global_position/raw/fix", NavSatFix)
     def gps_cb2(self, data: NavSatFix):
         self.gps_lat = data.latitude
         self.gps_lon = data.longitude
         self.gps_alt = data.altitude
 
-    @Node.ros("/ego_planner/finish_event", Empty)
+    @ros.topic("/ego_planner/finish_event", Empty)
     def wp_done_cb(self, data=None):
         self.runner.trigger(CEventType.WP_FINISH)
 
-    @Node.ros("/mavros/local_position/odom", Odometry)
+    @ros.topic("/mavros/local_position/odom", Odometry)
     def odom_cb(self, msg):
         if self.rel_alt is not None:
             self.runner.trigger(CEventType.ODOM_OK)
@@ -930,12 +942,12 @@ class Control(Node):
         ]
         self.yaw = self.quaternion_to_enu_yaw(quaternion)
 
-    @Node.ros("/UAV0/perception/object_location/location_vel", PointObj)
+    @ros.topic("/UAV0/perception/object_location/location_vel", PointObj)
     def target_cb(self, msg):
         self.runner.trigger(CEventType.DETECT, msg=msg)
 
-    @Node.ros("/cmd_vel", Twist)
-    def cmd_vel_cb(self, cmd_vel_msg):
+    @ros.topic("/cmd_vel", Twist)
+    def cmd_vel_cb(self, cmd_vel_msg: Twist):
         odom_msg = self.get_cur_odom()
         if odom_msg is None:
             return
@@ -974,9 +986,8 @@ class Control(Node):
         self.setpoint_pub.publish(target)
 
     def check_alt(self, target, threshold):
-        min_alt_threshold = self._get_param("min_alt_threshold", 0.5)
         return math.fabs(self.rel_alt - target) < max(
-            target * threshold, min_alt_threshold
+            target * threshold, self.min_alt_threshold
         )
 
     def check_yaw(self, yaw_enu):
@@ -991,14 +1002,14 @@ class Control(Node):
         """判断是否处于悬停状态"""
         return self.arm == True and self.rel_alt >= HOVER_THRESHOLD
 
-    @Node.ros("/mavros/rc/in", RCIn)
+    @ros.topic("/mavros/rc/in", RCIn)
     def rcin_cb(self, msg: RCIn):
         channels = list(msg.channels)
         while len(channels) < 18:
             channels.append(1500)
         self.rc_channel = (msg.header.stamp, channels)
 
-    @Node.ros("/mavros/global_position/rel_alt", Float64)
+    @ros.topic("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
         if self.odom is not None:
@@ -1009,22 +1020,22 @@ class Control(Node):
             if self.lift_yaw is not None and self.check_yaw(self.lift_yaw) < 0.1:
                 self.runner.trigger(CEventType.LIFT_DONE)
 
-    @Node.ros("/mavros/sys_status", SysStatus)
+    @ros.topic("/mavros/sys_status", SysStatus)
     def systatus_cb(self, data):
         self.sys_status = data
 
-    @Node.ros("/mavros/statustext/recv", StatusText)
+    @ros.topic("/mavros/statustext/recv", StatusText)
     def state_cb(self, data):
         self.state = data.text
 
-    @Node.ros("/mavros/ws", String)
+    @ros.topic("/mavros/ws", String)
     def detect_cb(self, data):
         try:
             self.ws_pub.publish(data)
         except json.JSONDecodeError:
             pass
 
-    @Node.ros("/mavros/state", State)
+    @ros.topic("/mavros/state", State)
     def mode_cb(self, data):
         if self.arm == True and data.armed == False:
             self.runner.trigger(CEventType.DISARM)
@@ -1036,7 +1047,7 @@ class Control(Node):
             self.runner.trigger(CEventType.SET_LAND)
         self.mode = data.mode
 
-    @Node.ros("/drone_0_ego_planner_node/optimal_list", Marker)
+    @ros.topic("/drone_0_ego_planner_node/optimal_list", Marker)
     def optimal_cb(self, msg):
         cur = time.time()
         if cur - self.send_time < 1:
@@ -1053,7 +1064,7 @@ class Control(Node):
             wp_list.append(gps)
         self.ws_pub.publish(json.dumps({"type": "state", "waypoint": wp_list}))
 
-    @Node.ros("/planning/pos_cmd", PositionCommand)
+    @ros.topic("/planning/pos_cmd", PositionCommand)
     def cmd_cb(self, msg):
         if self.runner.node.type != NodeType.WP:
             return
@@ -1066,15 +1077,15 @@ class Control(Node):
             yaw=msg.yaw,
         )
 
-    @Node.ros("/mavproxy/landing_target", PointStamped)
+    @ros.topic("/mavproxy/landing_target", PointStamped)
     def landing_target_cb(self, msg: PointStamped):
         self.landing_target = (msg.header.stamp, msg.point.x, msg.point.y)
 
-    @Node.ros("/mavros/distance_sensor/rangefinder_pub", Range)
+    @ros.topic("/mavros/distance_sensor/rangefinder_pub", Range)
     def rangefinder_cb(self, msg: Range):
         self.rangefinder_alt = msg.range
 
-    @Node.route("/get_gpsv2", "GET")
+    @http_proxy.get("/get_gpsv2")
     def get_gpsv2(self):
         return SUCCESS_RESPONSE(
             {
@@ -1088,7 +1099,7 @@ class Control(Node):
             }
         )
 
-    @Node.route("/set_posvel", "POST")
+    @http_proxy.post("/set_posvel")
     def set_pos_vel(self, pos, vel):
         v = vel
         diff_x, diff_y, diff_z = self.gps_target2enu_diff(pos)
@@ -1105,13 +1116,13 @@ class Control(Node):
         self.do_send_cmd(v=[vx, vy, vz])
         return SUCCESS_RESPONSE()
 
-    @Node.route("/stop_follow", "POST")
+    @http_proxy.post("/stop_follow")
     def stop_follow(self):
         self.stop_planner()  # 关闭避障
         self.runner.trigger(CEventType.STOP_FOLLOW)
         return SUCCESS_RESPONSE()
 
-    @Node.route("/set_waypoint", "POST")
+    @http_proxy.post("/set_waypoint")
     def set_waypoint(
         self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
     ):
@@ -1126,16 +1137,16 @@ class Control(Node):
         )
         return SUCCESS_RESPONSE()
 
-    @Node.route("/get_waypoint", "GET")
+    @http_proxy.get("/get_waypoint")
     def get_waypoint(self):
         return SUCCESS_RESPONSE(self._wp_raw)
 
-    @Node.route("/set_mode", "POST")
-    def route_set_mode(self, mode):
-        self.set_mode_service(0, mode)
+    @http_proxy.post("/set_mode")
+    def route_set_mode(self, data: SetModeModel):
+        self.set_mode_service(0, data.mode)
         return SUCCESS_RESPONSE()
 
-    @Node.route("/land", "POST")
+    @http_proxy.post("/land")
     def route_land(self, waypoint=None, speed=None):
         if waypoint is None or len(waypoint) == 0:
             self.runner.trigger(CEventType.SET_LAND)
@@ -1145,31 +1156,31 @@ class Control(Node):
             )
         return SUCCESS_RESPONSE()
 
-    @Node.route("/return", "POST")
+    @http_proxy.post("/return")
     def route_return(self, waypoint=None, speed=None):
         if waypoint is None:
             waypoint = []
         self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, speed=speed, rtl=True)
         return SUCCESS_RESPONSE()
 
-    @Node.route("/takeoff", "POST")
-    def takeoff(self, alt):
-        self.runner.trigger(CEventType.SET_TAKEOFF, alt=alt)
+    @http_proxy.post("/takeoff")
+    def takeoff(self, data: TakeoffModel):
+        self.runner.trigger(CEventType.SET_TAKEOFF, alt=data.alt)
         return SUCCESS_RESPONSE()
 
-    @Node.route("/get_gps", "GET")
+    @http_proxy.get("/get_gps")
     def get_gps(self):
         rel_alt = 0 if self.rel_alt is None else self.rel_alt
         yaw = 0 if self.yaw is None else self.yaw
-        return {"msg": [self.lon, self.lat, rel_alt, yaw], "status": "succecss"}
+        return {"msg": [self.lon, self.lat, rel_alt, yaw], "status": "success"}
 
-    @Node.route("/stop_planner", "POST")
+    @http_proxy.post("/stop_planner")
     def stop_planner(self):
         self.planner_enable = False
         self.ws_pub.publish(json.dumps({"type": "state", "planner": "disable"}))
         return SUCCESS_RESPONSE()
 
-    @Node.route("/start_planner", "POST")
+    @http_proxy.post("/start_planner")
     def start_planner(self, auto=False):
         if auto and not self.auto_planner_enable:
             return SUCCESS_RESPONSE("planner_enable=False时不允许自动打开避障")
@@ -1177,32 +1188,32 @@ class Control(Node):
         self.ws_pub.publish(json.dumps({"type": "state", "planner": "enable"}))
         return SUCCESS_RESPONSE()
 
-    @Node.route("/get_planner", "GET")
+    @http_proxy.get("/get_planner")
     def get_planner(self):
         return SUCCESS_RESPONSE(msg=self.planner_enable)
 
-    @Node.route("/get_pland", "GET")
+    @http_proxy.get("/get_pland")
     def get_pland(self):
         return SUCCESS_RESPONSE(msg=self.pland_enable)
 
-    @Node.route("/stop_pland", "POST")
+    @http_proxy.post("/stop_pland")
     def stop_pland(self):
         self.pland_enable = False
         self.ws_pub.publish(json.dumps({"type": "state", "pland": "disable"}))
         return SUCCESS_RESPONSE()
 
-    @Node.route("/start_pland", "POST")
+    @http_proxy.post("/start_pland")
     def start_pland(self):
         self.pland_enable = True
         self.ws_pub.publish(json.dumps({"type": "state", "pland": "enable"}))
         return SUCCESS_RESPONSE()
 
-    @Node.route("/arm", "POST")
+    @http_proxy.post("/arm")
     def do_arm(self):
         self._do_arm()
         return SUCCESS_RESPONSE()
 
-    @Node.route("/prearms", "GET")
+    @http_proxy.get("/prearms")
     def prearm(self):
         # mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK
         self.state = ""
@@ -1226,9 +1237,9 @@ class Control(Node):
                 return SUCCESS_RESPONSE({"arm": False, "reason": self.state})
         return SUCCESS_RESPONSE({"arm": False, "reason": "wait for reason timeout"})
 
-    @Node.route("/reboot_fcu", "POST")
+    @http_proxy.post("/reboot_fcu")
     def reboot_fcu(self):
-        rospy.wait_for_service("/mavros/cmd/command")
+        rospy.wait_for_service("/mavros/cmd/command", timeout=4)
         cmd_service = rospy.ServiceProxy("/mavros/cmd/command", CommandLong)
 
         # MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN (246)
@@ -1246,4 +1257,4 @@ class Control(Node):
 
 if __name__ == "__main__":
     control_node = Control()
-    control_node.run()
+    rospy.spin()
