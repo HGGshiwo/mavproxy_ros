@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, List
 from pydantic import BaseModel
 
 
@@ -8,6 +8,14 @@ class SetModeModel(BaseModel):
 
 class TakeoffModel(BaseModel):
     alt: float
+
+
+class SetWaypointModel(BaseModel):
+    waypoint: List[Any]
+    nodeEventList: List[Any] = None
+    speed: float = None
+    land: bool = False
+    rtl: bool = False
 
 
 # Other
@@ -32,6 +40,7 @@ class SetExposureModel(BaseModel):
 
 class StartDetectModel(BaseModel):
     type: str = "smoke"
+
 
 # Param
 class SetParamModel(BaseModel):

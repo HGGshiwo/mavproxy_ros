@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 from base.ctrl_node import Runner
 from event_callback import ros, http_proxy
 from event_callback.core import CallbackManager
-from event_callback.utils import ROSProxy, rosparam_field
+from event_callback.utils import ROSProxy, rosparam_field, throttle
 from control_model import *
 import rospy
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong
@@ -375,6 +375,7 @@ class WpNode(CtrlNode):
         context.stop_pub.publish(Empty())
 
     @CtrlNode.on(CEventType.IDLE)
+    @throttle(2)
     def idle_cb(self):
         context = self.context
         cur_pos = [
@@ -387,7 +388,7 @@ class WpNode(CtrlNode):
             + (cur_pos[1] - self.goal[1]) ** 2
             + (cur_pos[2] - self.goal[2]) ** 2
         )
-        context.ws_pub.publish(json.dumps({"type": "state", "dis": dis}))
+        context.ws_pub.publish(json.dumps({"type": "state", "dis": f"{dis:.2f}"}))
 
         if not self.planner_enable:
             if dis < 2:
@@ -594,7 +595,7 @@ class Control(CallbackManager, ROSProxy):
         self.wp_pub = rospy.Publisher(
             "/move_base_simple/goal2", PoseStamped, queue_size=-1
         )
-        self.ws_pub = rospy.Publisher("/mavproxy/ws", String, queue_size=-1)
+        self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
         self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
         self.setpoint_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
@@ -608,11 +609,26 @@ class Control(CallbackManager, ROSProxy):
         self.pland_enable = rosparam_field("pland_enable", default=True)  # 是否进行精准降落
         self.min_alt_threshold = rosparam_field("min_alt_threshold", 0.5)
 
+    @property
+    def planner_desc(self):
+        return "启用" if self.planner_enable else "关闭"
+
+    @property
+    def pland_desc(self):
+        return "启用" if self.pland_enable else "关闭"
+
+    def _post_init(self):
         verison = rospy.get_param("/mavros/version", "No version")
         self.do_ws_pub(
-            {"type": "state", "planner": self.planner_enable, "version": verison}
+            {
+                "type": "state",
+                "planner": self.planner_desc,
+                "version": verison,
+                "state": self.runner.node.type.value,
+                "pland": self.pland_desc,
+            }
         )
-        self.do_ws_pub({"type": "state", "state": self.runner.node.type.value})
+        print("publish done")
 
     def do_ws_pub(self, data):
         self.ws_pub.publish(json.dumps(data))
@@ -1123,17 +1139,15 @@ class Control(CallbackManager, ROSProxy):
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/set_waypoint")
-    def set_waypoint(
-        self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
-    ):
-        self._wp_raw = copy.deepcopy(waypoint)
+    def set_waypoint(self, data: SetWaypointModel):
+        self._wp_raw = copy.deepcopy(data.waypoint)
         self.runner.trigger(
             CEventType.SET_WP,
-            waypoint=waypoint,
-            nodeEventList=nodeEventList,
-            speed=speed,
-            land=land,
-            rtl=rtl,
+            waypoint=data.waypoint,
+            nodeEventList=data.nodeEventList,
+            speed=data.speed,
+            land=data.land,
+            rtl=data.rtl,
         )
         return SUCCESS_RESPONSE()
 
@@ -1177,7 +1191,7 @@ class Control(CallbackManager, ROSProxy):
     @http_proxy.post("/stop_planner")
     def stop_planner(self):
         self.planner_enable = False
-        self.ws_pub.publish(json.dumps({"type": "state", "planner": "disable"}))
+        self.ws_pub.publish(json.dumps({"type": "state", "planner": self.planner_desc}))
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/start_planner")
@@ -1185,7 +1199,7 @@ class Control(CallbackManager, ROSProxy):
         if auto and not self.auto_planner_enable:
             return SUCCESS_RESPONSE("planner_enable=False时不允许自动打开避障")
         self.planner_enable = True
-        self.ws_pub.publish(json.dumps({"type": "state", "planner": "enable"}))
+        self.ws_pub.publish(json.dumps({"type": "state", "planner": self.planner_desc}))
         return SUCCESS_RESPONSE()
 
     @http_proxy.get("/get_planner")
@@ -1199,13 +1213,13 @@ class Control(CallbackManager, ROSProxy):
     @http_proxy.post("/stop_pland")
     def stop_pland(self):
         self.pland_enable = False
-        self.ws_pub.publish(json.dumps({"type": "state", "pland": "disable"}))
+        self.ws_pub.publish(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/start_pland")
     def start_pland(self):
         self.pland_enable = True
-        self.ws_pub.publish(json.dumps({"type": "state", "pland": "enable"}))
+        self.ws_pub.publish(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/arm")

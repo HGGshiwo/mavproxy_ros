@@ -85,8 +85,8 @@ class Other(CallbackManager):
     @http_proxy.get("/get_gimbal")
     def get_gimbal(self):
         try:
-            mode = rospy.get_param("/UAV0/sensor/serial_gimbal/angle_mode")
-            angle = rospy.get_param("/UAV0/sensor/serial_gimbal/gimbal_angle")
+            mode = rospy.get_param("/UAV0/sensor/serial_gimbal/angle_mode", 0)
+            angle = rospy.get_param("/UAV0/sensor/serial_gimbal/gimbal_angle", 0)
             return SUCCESS_RESPONSE({"mode": mode, "angle": angle})
         except Exception as e:
             return ERROR_RESPONSE(str(e))
@@ -94,7 +94,7 @@ class Other(CallbackManager):
     @http_proxy.post("/set_gimbal")
     def set_gimbal(self, data: SetGimbalModel):
         service_name = "/UAV0/sensor/serial_gimbal/set_gimbal_angle"
-        rospy.wait_for_service(service_name, timeout=5)
+        rospy.wait_for_service(service_name, timeout=3)
         srv = rospy.ServiceProxy(service_name, SetGimbalAngle)
         res = srv(mode=data.mode, angle=data.angle)
         if not res.success:
@@ -114,7 +114,7 @@ class Other(CallbackManager):
                 "value": rospy.get_param("/UAV0/sensor/video11_camera/ISO", 50),
                 "max": rospy.get_param("/UAV0/sensor/video11_camera/ISO_max", 100),
                 "min": rospy.get_param("/UAV0/sensor/video11_camera/ISO_min", 0),
-                "step": rospy.get_param("/UAV0/sensor/video11_camera/ISO_step", 1),
+                "step": rospy.get_param("/UAV0/sensor/video11_camera/ISO_step", 2),
             },
         }
         return SUCCESS_RESPONSE(data)
@@ -122,7 +122,7 @@ class Other(CallbackManager):
     @http_proxy.post("/set_exposure")
     def set_exposure(self, data: SetExposureModel):
         service_name = "/UAV0/sensor/video11_camera/set_exposure"
-        rospy.wait_for_service(service_name, timeout=5)
+        rospy.wait_for_service(service_name, timeout=3)
         srv = rospy.ServiceProxy(service_name, SetCameraExposure)
         res = srv(shutter=int(data.shutter), sensitivity=int(data.sensitivity))
         if not res.success:

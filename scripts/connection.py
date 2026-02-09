@@ -67,7 +67,7 @@ class Connection(CallbackManager):
     def gps_fix_cb(self, data: GPSRAW):
         self._publish_state(dict(gps_fix_type=data.fix_type))
 
-    @ros.topic("/mavros/global_position/rel_alt", Float64)
+    @ros.topic("/mavros/global_position/rel_alt", Float64, frequency=2)
     def alt_cb(self, data: Float64):
         self._publish_state(dict(rel_alt=data.data))
 
