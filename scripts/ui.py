@@ -1,6 +1,8 @@
+from turtle import title
 from event_callback.components.http.ui_config import (
     CopyConfig,
     FormConfig,
+    GroupTableColumnConfig,
     InnerButtonConfig,
     InputFormItemConfig,
     NumberFormItemConfig,
@@ -8,6 +10,7 @@ from event_callback.components.http.ui_config import (
     RadioFormItemConfig,
     StatusConfig,
     ToastConfig,
+    GroupTableFormItemConfig,
 )
 
 StatusConfig("connected", "连接状态")
@@ -139,6 +142,27 @@ PrimaryButtonConfig(
         ),
         submit=InnerButtonConfig(
             name="提交", target=ToastConfig(url="/set_exposure", method="POST")
+        ),
+    ),
+)
+
+PrimaryButtonConfig(
+    name="参数设置",
+    target=FormConfig(
+        url="/params",
+        method="GET",
+        items=dict(
+            param=GroupTableFormItemConfig(
+                columns=dict(
+                    name=GroupTableColumnConfig(title="参数名称"),
+                    help=GroupTableColumnConfig(title="参数解释", width=300),
+                    value=GroupTableColumnConfig(title="参数值", editable=True),
+                ),
+                titleKey="name"
+            )
+        ),
+        submit=InnerButtonConfig(
+            name="提交", target=ToastConfig(url="/set_param", method="POST")
         ),
     ),
 )
