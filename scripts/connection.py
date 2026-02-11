@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+from pathlib import Path
 from event_callback import http, ros
 from event_callback.components.http.message_handler import (
     EventMessageHandler,
@@ -80,5 +81,14 @@ class Connection(CallbackManager):
 
 
 if __name__ == "__main__":
-    Connection([http.config(port=8001, register=True), ros.config()])
+    Connection(
+        [
+            http.config(
+                port=8000,
+                register=True,
+                static_dir=Path(__file__).parent.parent / "static",
+            ),
+            ros.config(),
+        ]
+    )
     rospy.spin()

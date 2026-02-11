@@ -2,13 +2,15 @@ from turtle import title
 from event_callback.components.http.ui_config import (
     CopyConfig,
     FormConfig,
-    GroupTableColumnConfig,
+    TableColumnConfig,
     InnerButtonConfig,
     InputFormItemConfig,
     NumberFormItemConfig,
     PrimaryButtonConfig,
     RadioFormItemConfig,
     StatusConfig,
+    TableColumnConfig,
+    TableConfig,
     ToastConfig,
     GroupTableFormItemConfig,
 )
@@ -154,15 +156,26 @@ PrimaryButtonConfig(
         items=dict(
             param=GroupTableFormItemConfig(
                 columns=dict(
-                    name=GroupTableColumnConfig(title="参数名称"),
-                    help=GroupTableColumnConfig(title="参数解释", width=300),
-                    value=GroupTableColumnConfig(title="参数值", editable=True),
+                    name=TableColumnConfig(title="参数名称"),
+                    help=TableColumnConfig(title="参数解释", width=300),
+                    value=TableColumnConfig(title="参数值", editable=True),
                 ),
-                titleKey="name"
+                titleKey="name",
             )
         ),
         submit=InnerButtonConfig(
             name="提交", target=ToastConfig(url="/set_param", method="POST")
         ),
+    ),
+)
+
+TableConfig(
+    config_id="mission_data",
+    columns=dict(
+        num=TableColumnConfig(title="索引"),
+        lat=TableColumnConfig(title="纬度"),
+        lon=TableColumnConfig(title="经度"),
+        alt=TableColumnConfig(title="高度"),
+        command=TableColumnConfig(title="类型"),
     ),
 )
