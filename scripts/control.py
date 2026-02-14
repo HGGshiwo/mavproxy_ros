@@ -8,6 +8,7 @@ from event_callback import ros, http_proxy
 from event_callback.core import CallbackManager
 from event_callback.utils import ROSProxy, rosparam_field, throttle
 from control_model import *
+from base.pid_controller import PIDController
 import rospy
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong
 from mavros_msgs.msg import PositionTarget, SysStatus, StatusText, HomePosition
@@ -27,6 +28,8 @@ from base.utils import SUCCESS_RESPONSE, post_json
 import time
 import math
 from mavros_msgs.msg import State
+import tf
+import tf.transformations
 from visualization_msgs.msg import Marker
 from enum import Enum
 from base.ctrl_node import CtrlNode as _CtrlNode, EventType
@@ -423,8 +426,8 @@ class WpNode(CtrlNode):
             self.step(NodeType.LIFTING)
 
 
-MAX_X_SPEED = 1
-MAX_Y_SPEED = 1
+MAX_X_SPEED = 0.5
+MAX_Y_SPEED = 0.5
 MAX_Z_SPEED = 1
 
 
@@ -435,6 +438,15 @@ class LandNode(CtrlNode):
 
     def __init__(self):
         super().__init__(NodeType.LANDING)
+        self.pid_x_controller = PIDController(
+            1, 0.005, 0.01, setpoint=0, output_min=-MAX_X_SPEED, output_max=MAX_X_SPEED
+        )
+        self.pid_y_controller = PIDController(
+            1, 0.005, 0.01, setpoint=0, output_min=-MAX_Y_SPEED, output_max=MAX_Y_SPEED
+        )
+        self.pid_yaw_controller = PIDController(
+            1, 0.005, 0.01, setpoint=0, output_min=-1, output_max=1
+        )
 
     def enter(self):
         context = self.context
@@ -457,11 +469,12 @@ class LandNode(CtrlNode):
             vx = ((rc_channels[1] - 1500) / 500) * MAX_X_SPEED
             vx = np.clip(vx, -MAX_X_SPEED, MAX_X_SPEED)
 
-            return vx, vy, 0
+            return vx, vy, 0, 0
 
-    def _get_landing_speed(self, context):
+    def _get_landing_speed(self, context: Control):
         landing_target = copy.deepcopy(context.landing_target)
-        timestamp, x, y = landing_target
+        timestamp, x, y, yaw = landing_target
+        print(f"yaw: {yaw}")
         time_jump = math.fabs((rospy.Time.now() - timestamp).to_sec())
         if time_jump > 0.05:  # 20hz
             print(f"target too old: {time_jump:.3f} > 0.05s, ignore")
@@ -474,16 +487,21 @@ class LandNode(CtrlNode):
                 return
             vz = np.clip(-context.rangefinder_alt, -1, 1)
 
-        vx = np.clip(-y, -1, 1)
-        vy = np.clip(-x, -1, 1)
-        return vx, vy, vz
+        stamp = rospy.Time.now().to_sec()
+        rel_alt = np.clip(context.rangefinder_alt, 0.1, 10)
+        # 控制像素中心点靠近目标点
+        vx = -self.pid_x_controller(y * rel_alt, stamp)
+        vy = -self.pid_y_controller(x * rel_alt, stamp)
+        yaw_rate = -self.pid_yaw_controller(yaw, stamp)
+        return vx, vy, vz, yaw_rate
 
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
         if not context.pland_enable:
             return
-        if context.rangefinder_alt < 1e-3:
+        if context.rangefinder_alt < 0.2:
+            context.do_land()
             print(f"land done, alt: {context.rangefinder_alt}")
             self.step(NodeType.GROUND)
             return
@@ -494,9 +512,13 @@ class LandNode(CtrlNode):
             v_xyz = self._get_landing_speed(context)
         if v_xyz is None:
             return
-        vx, vy, vz = v_xyz
-        print(vx, vy, vz)
-        context.do_send_cmd(v=[vx, vy, vz], frame=PositionTarget.FRAME_BODY_OFFSET_NED)
+        vx, vy, vz, yaw_rate = v_xyz
+        print(vx, vy, vz, yaw_rate)
+        context.do_send_cmd(
+            v=[vx, vy, vz],
+            yaw_rate=yaw_rate,
+            frame=PositionTarget.FRAME_BODY_OFFSET_NED,
+        )
 
 
 class FollowNode(CtrlNode):
@@ -670,6 +692,10 @@ class Control(CallbackManager, ROSProxy):
         yaw_rate: Optional[float] = None,
         frame: Any = PositionTarget.FRAME_LOCAL_NED,
     ):
+        """ 
+        机体坐标系下: x为前, y为左, z为下
+        ENU坐标系下: x为E, y为N, z为U
+        """
         target = PositionTarget()
         target.header.stamp = rospy.Time.now()
         target.header.frame_id = "local_ned"
@@ -1093,9 +1119,18 @@ class Control(CallbackManager, ROSProxy):
             yaw=msg.yaw,
         )
 
-    @ros.topic("/mavproxy/landing_target", PointStamped)
-    def landing_target_cb(self, msg: PointStamped):
-        self.landing_target = (msg.header.stamp, msg.point.x, msg.point.y)
+    @ros.topic("/mavproxy/landing_target", PoseStamped)
+    def landing_target_cb(self, msg: PoseStamped):
+        quat = msg.pose.orientation
+        _, _, yaw = tf.transformations.euler_from_quaternion(
+            [quat.x, quat.y, quat.z, quat.w]
+        )
+        self.landing_target = (
+            msg.header.stamp,
+            msg.pose.position.x,
+            msg.pose.position.y,
+            yaw,
+        )
 
     @ros.topic("/mavros/distance_sensor/rangefinder_pub", Range)
     def rangefinder_cb(self, msg: Range):

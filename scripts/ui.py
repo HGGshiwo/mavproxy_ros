@@ -52,7 +52,11 @@ PrimaryButtonConfig(
     target=ToastConfig(url="/set_mode", method="POST", data=dict(mode="LOITER")),
 )
 PrimaryButtonConfig(name="返航", target=ToastConfig(url="/return", method="POST"))
-PrimaryButtonConfig(name="降落", target=ToastConfig(url="/land", method="POST"))
+PrimaryButtonConfig(
+    name="降落",
+    target=ToastConfig(url="/set_mode", method="POST", data=dict(mode="LAND")),
+)
+PrimaryButtonConfig(name="精准降落", target=ToastConfig(url="/land", method="POST"))
 PrimaryButtonConfig(name="重启飞控", target=ToastConfig(url="/reboot_fcu", method="POST"))
 PrimaryButtonConfig(
     name="输入航点",

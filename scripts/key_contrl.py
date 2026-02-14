@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import math
 import rospy
 from geometry_msgs.msg import Twist
 import pygame
@@ -57,10 +58,12 @@ def main():
     pressed = set()
     running = True
     clock = pygame.time.Clock()
+    last_zero_send = True
 
     while running and not rospy.is_shutdown():
         draw_usage(screen, font)
         pygame.display.flip()
+        clock.tick(50)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -77,13 +80,23 @@ def main():
                     control[axis] -= value
                     pressed.remove(event.key)
         # 持续发送当前速度
+
         twist = Twist()
         twist.linear.x = control["x"]
         twist.linear.y = control["y"]
         twist.linear.z = control["z"]
         twist.angular.z = control["th"]
-        pub.publish(twist)
-        clock.tick(50)
+
+        control_sum = sum([math.fabs(control[key]) for key in ["x", "y", "z", "th"]])
+
+        if control_sum < 1e-3:
+            if not last_zero_send:
+                pub.publish(twist)
+                last_zero_send = True
+                continue
+        else:
+            last_zero_send = False
+            pub.publish(twist)
 
     pub.publish(Twist())  # 停止
     pygame.quit()
