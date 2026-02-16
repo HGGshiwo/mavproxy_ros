@@ -1,12 +1,14 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import logging
+from pathlib import Path
 from typing import Any, List, Optional
 
 from base.ctrl_node import Runner
 from event_callback import ros, http_proxy
 from event_callback.core import CallbackManager
-from event_callback.utils import ROSProxy, rosparam_field, throttle
+from event_callback.utils import ROSProxy, rosparam_field, setup_logger, throttle
 from control_model import *
 from base.pid_controller import PIDController
 import rospy
@@ -41,6 +43,8 @@ STOP_SPAN = 100
 TAKEOFF_THRESHOLD = 0.05  # 高度判断阈值(比例)
 HOVER_THRESHOLD = 1  # 判断为悬停状态(绝对高度)
 
+setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
+logger = logging.getLogger(__name__)
 
 class NodeType(Enum):
     INIT = "初始化"
@@ -94,7 +98,7 @@ class CtrlNode(_CtrlNode):
         self.step(NodeType.GROUND)
 
     def land_cb(self):
-        print("set land")
+        logger.info("set land")
         # self.context.do_land()
         self.step(NodeType.LANDING)
         post_json("stop_record")
@@ -109,7 +113,7 @@ class CtrlNode(_CtrlNode):
         self.step(NodeType.FOLLOW)
 
     def set_wp(self, waypoint: list, nodeEventList: list | None, land: bool, rtl: bool):
-        print(f"set wp return: {rtl} wp: {waypoint}")
+        logger.info(f"set wp return: {rtl} wp: {waypoint}")
         context = self.context
         context.land = land or rtl
         context.nodeEventList = nodeEventList
@@ -295,10 +299,8 @@ class LiftingNode(CtrlNode):
 
         try:
             context.lift_yaw = context.enu_xy2yaw(diff_x, diff_y)  # 这里是enu的yaw
-        except:
-            import traceback
-
-            traceback.print_exc()
+        except Exception as e:
+            logger.exception(str(e))
 
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
@@ -358,7 +360,7 @@ class WpNode(CtrlNode):
         py = goal.pose.position.y
         pz = goal.pose.position.z
         self.goal = [px, py, pz]
-        print(px, py, pz)
+        logger.info(f"wp target: {[px, py, pz]}")
         self.planner_enable = context.planner_enable  # 按照进入的时候是否开启判断
         if self.planner_enable:
             context.wp_pub.publish(goal)
@@ -368,7 +370,7 @@ class WpNode(CtrlNode):
 
         if context.nodeEventList is not None:
             event_list = context.nodeEventList[context.wp_idx]
-            print(f"event list: {event_list}")
+            logger.info(f"event list: {event_list}")
             if event_list is not None:
                 for event in event_list:
                     self.run_wp_event(event)
@@ -415,7 +417,7 @@ class WpNode(CtrlNode):
                 "wp_idx": context.wp_idx + 1,
             }
         )
-        print(f"wp done: {context.waypoint[context.wp_idx]}")
+        logger.info(f"wp done: {context.waypoint[context.wp_idx]}")
         context.wp_idx += 1
         if context.wp_idx >= len(context.waypoint):
             if context.land:
@@ -474,16 +476,16 @@ class LandNode(CtrlNode):
     def _get_landing_speed(self, context: Control):
         landing_target = copy.deepcopy(context.landing_target)
         timestamp, x, y, yaw = landing_target
-        print(f"yaw: {yaw}")
+        logger.info(f"yaw: {yaw}")
         time_jump = math.fabs((rospy.Time.now() - timestamp).to_sec())
         if time_jump > 0.05:  # 20hz
-            print(f"target too old: {time_jump:.3f} > 0.05s, ignore")
+            logger.warning(f"target too old: {time_jump:.3f} > 0.05s, ignore")
             return None
         vz = 0
         z_err = np.sqrt(x * x + y * y)
         if z_err < 0.1:  # 误差足够小，允许下降
             if context.rangefinder_alt is None:
-                print("no rangefinder data found, ignore")
+                logger.warning("no rangefinder data found, ignore")
                 return
             vz = np.clip(-context.rangefinder_alt, -1, 1)
 
@@ -502,7 +504,7 @@ class LandNode(CtrlNode):
             return
         if context.rangefinder_alt < 0.2:
             context.do_land()
-            print(f"land done, alt: {context.rangefinder_alt}")
+            logger.info(f"land done, alt: {context.rangefinder_alt}")
             self.step(NodeType.GROUND)
             return
         if context.landing_target is None:
@@ -513,7 +515,7 @@ class LandNode(CtrlNode):
         if v_xyz is None:
             return
         vx, vy, vz, yaw_rate = v_xyz
-        print(vx, vy, vz, yaw_rate)
+        logger.info(f"plan control: {[vx, vy, vz, yaw_rate]}")
         context.do_send_cmd(
             v=[vx, vy, vz],
             yaw_rate=yaw_rate,
@@ -605,11 +607,11 @@ class Control(CallbackManager, ROSProxy):
             step_cb=self.step_cb,
         )
 
-        rospy.loginfo("wait for mavros service...")
+        logger.info("wait for mavros service...")
         rospy.wait_for_service("/mavros/cmd/arming", timeout=5)
         rospy.wait_for_service("/mavros/set_mode", timeout=5)
         rospy.wait_for_service("/mavros/cmd/takeoff", timeout=5)
-        rospy.loginfo("control done")
+        logger.info("control done")
         self.takeoff_srv = rospy.ServiceProxy("/mavros/cmd/takeoff", CommandTOL)
         self.arm_service = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
         self.set_mode_service = rospy.ServiceProxy("/mavros/set_mode", SetMode)
@@ -650,7 +652,7 @@ class Control(CallbackManager, ROSProxy):
                 "pland": self.pland_desc,
             }
         )
-        print("publish done")
+        logger.info("publish done")
 
     def do_ws_pub(self, data):
         self.ws_pub.publish(json.dumps(data))
@@ -680,7 +682,7 @@ class Control(CallbackManager, ROSProxy):
             )
 
         self.do_ws_pub({"mission_data": out, "type": "state"})
-        print(f'pub wp {json.dumps({"mission_data": out, "type": "state"})}')
+        logger.info(f'pub wp {json.dumps({"mission_data": out, "type": "state"})}')
 
     def do_send_cmd(
         self,
@@ -788,10 +790,10 @@ class Control(CallbackManager, ROSProxy):
             if out.get("arm", False) == False:
                 raise ValueError(out["reason"])
             self._do_arm()
-            rospy.loginfo("Vehicle armed")
+            logger.info("Vehicle armed")
 
             # 持续发布目标点
-            rospy.loginfo("Taking off...")
+            logger.info("Taking off...")
             response = self.takeoff_srv(
                 min_pitch=0,
                 yaw=0,
@@ -799,7 +801,7 @@ class Control(CallbackManager, ROSProxy):
                 longitude=0,
                 altitude=alt,  # Target altitude in meters
             )
-            rospy.loginfo("Takeoff command finished.")
+            logger.info("Takeoff command finished.")
 
     def quaternion_to_enu_yaw(self, quaternion):
         """
@@ -922,14 +924,14 @@ class Control(CallbackManager, ROSProxy):
     def get_cur_odom(self, t_cmd=None) -> Odometry:
         with self.odom_lock:
             if self.odom is None:
-                print("error: wait for odom")
+                logger.error("wait for odom")
                 return
             odom_msg = copy.deepcopy(self.odom)
         if t_cmd is not None:
             t_odom = odom_msg.header.stamp.to_sec()
             time_diff = abs(t_odom - t_cmd)
             if time_diff >= 0.2:
-                print(f"error: odom and PositionCommand time diff:{time_diff}")
+                logger.error(f"odom and PositionCommand time diff:{time_diff}")
                 return
         return odom_msg
 
@@ -953,7 +955,7 @@ class Control(CallbackManager, ROSProxy):
             self.takeoff_lat = msg.geo.latitude
             self.takeoff_lon = msg.geo.longitude
             self.takeoff_alt = msg.geo.altitude
-            print(f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}")
+            logger.info(f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}")
 
     @ros.topic("/mavros/global_position/global", NavSatFix)
     def gps_cb(self, data: NavSatFix):

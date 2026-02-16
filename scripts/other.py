@@ -1,9 +1,11 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+from pathlib import Path
 from base.node import SUCCESS_RESPONSE, Node
 from base.utils import post_json
 from event_callback import http_proxy, ros
 from event_callback.core import CallbackManager
+from event_callback.utils import setup_logger
 import rospy
 from std_msgs.msg import String
 from base.utils import ERROR_RESPONSE
@@ -18,6 +20,8 @@ except Exception:
     pass
 from mavros_msgs.msg import SysStatus
 from control_model import *
+
+setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 
 class Other(CallbackManager):

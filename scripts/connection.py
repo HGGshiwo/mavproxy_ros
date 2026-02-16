@@ -1,12 +1,16 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import logging
 from pathlib import Path
 from event_callback import http, ros
+from event_callback.components.http.core import HTTPConfig
 from event_callback.components.http.message_handler import (
     EventMessageHandler,
     MessageType as _MessageType,
 )
+from event_callback.components.ros import ROSConfig
 from event_callback.core import CallbackManager
+from event_callback.utils import print_logger_info, setup_logger
 import rospy
 from std_msgs.msg import UInt32, Float64
 from mavros_msgs.msg import State
@@ -16,6 +20,7 @@ from mavros_msgs.msg import GPSRAW
 from typing import Dict, Any
 from ui import *
 
+logger = logging.getLogger(__file__)
 
 class MessageType(_MessageType):
     EVENT = EventMessageHandler.create("event")
@@ -37,7 +42,7 @@ class Connection(CallbackManager):
         http.ws_send(self, error, MessageType.ERROR)
 
     def _set_rate(self):
-        rospy.wait_for_service("/mavros/set_stream_rate")
+        rospy.wait_for_service("/mavros/set_stream_rate", timeout=3)
         set_rate = rospy.ServiceProxy("/mavros/set_stream_rate", StreamRate)
 
         req = StreamRateRequest()
@@ -45,7 +50,8 @@ class Connection(CallbackManager):
         req.message_rate = 10
         req.on_off = True
         resp = set_rate(req)
-        rospy.loginfo("set stream done")
+        logger.info("set stream done")
+        # print_logger_info()
 
     @ros.topic("/mavros/state", State)
     def mode_cb(self, data: State):
@@ -76,19 +82,22 @@ class Connection(CallbackManager):
     def state_cb(self, data: StatusText):
         if data.severity > StatusText.WARNING:
             return
-        print(data.severity, data.text)
+        logger.error(f"{data.severity}, {data.text}")
         self._publish_error(dict(error=data.text))
 
 
 if __name__ == "__main__":
+    setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
+    
+
     Connection(
         [
-            http.config(
+            HTTPConfig(
                 port=8000,
                 register=True,
                 static_dir=Path(__file__).parent.parent / "static",
             ),
-            ros.config(),
+            ROSConfig(),
         ]
     )
     rospy.spin()

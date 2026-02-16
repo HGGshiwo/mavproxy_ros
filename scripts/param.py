@@ -1,10 +1,13 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import logging
+from pathlib import Path
 import re
 from base.node import SUCCESS_RESPONSE, Node
 from event_callback.core import CallbackManager
+from event_callback.utils import setup_logger
 from mavros_msgs.srv import ParamPull, ParamSet
-from mavros_msgs.msg import ParamValue, OverrideRCIn
+from mavros_msgs.msg import Param, ParamValue
 from base.utils import ERROR_RESPONSE
 import xml.etree.ElementTree as ET
 from event_callback import http_proxy, ros
@@ -13,6 +16,9 @@ from typing import Any
 import rospy
 import rospkg
 import os
+
+logger = logging.getLogger(__name__)
+setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 
 def parse_param(param):
@@ -45,7 +51,7 @@ class Param(CallbackManager):
         resp = param_pull(force_pull=True)
         if not resp.success:
             return ERROR_RESPONSE("参数拉取失败")
-        rospy.loginfo(resp.param_received)
+        logger.info(f"param received: {resp.param_received}")
 
     def load_pdef(self, path):
         # 假设xml文件名为 parameters.xml
@@ -81,24 +87,24 @@ class Param(CallbackManager):
             response = self.param_set_service(param_id=param_name, value=param)
 
             if response.success:
-                rospy.loginfo(f"参数设置成功: {param_name} = {value}")
+                logger.info(f"参数设置成功: {param_name} = {value}")
                 return True
             else:
-                rospy.logerr(f"参数设置失败: {param_name}")
+                logger.error(f"参数设置失败: {param_name}")
                 return False
 
         except rospy.ServiceException as e:
-            rospy.logerr(f"服务调用失败: {e}")
+            logger.error(f"服务调用失败: {e}")
             return False
 
-    @ros.topic("/mavros/param/param_value", ParamValue)
-    def param_callback(msg):
+    @ros.topic("/mavros/param/param_value", Param)
+    def param_callback(self, msg: Param):
         """监听参数变化并写入 ROS param"""
         param_name = msg.param_id
         param_value = msg.value.integer if msg.value.integer != 0 else msg.value.real
         # 将参数写入 ROS param，路径为 /mavros/param/参数名
         rospy.set_param(f"/mavros/param/{param_name}", param_value)
-        rospy.loginfo(f"同步飞控参数 {param_name} = {param_value} 到 ROS param")
+        logger.info(f"同步飞控参数 {param_name} = {param_value} 到 ROS param")
 
     @http_proxy.post("/set_param")
     def set_param(self, data: SetParamModel):

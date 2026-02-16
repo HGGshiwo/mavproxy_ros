@@ -6,3 +6,4 @@ eeprom.bin
 logs/*.BIN
 terrain/*
 logs/LASTLOG.TXT
+log/

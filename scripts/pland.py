@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
+import logging
+from pathlib import Path
 import threading
 from typing import Any, Dict, List, Optional, Union
 from base.utils import FPSHelper
@@ -9,7 +11,7 @@ import numpy as np
 from pupil_apriltags import Detection, Detector
 import cv2
 
-from event_callback.utils import rosparam_field
+from event_callback.utils import rosparam_field, setup_logger
 from event_callback import ros
 from event_callback.utils import ROSProxy, rostopic_field
 from event_callback.core import CallbackManager, CallbackMixin
@@ -24,6 +26,8 @@ from sensor_msgs.msg import Range
 import tf.transformations as tft
 from geometry_msgs.msg import Quaternion
 
+logger = logging.getLogger(__name__)
+setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 class Pland(CallbackManager, ROSProxy):
     def __init__(
@@ -153,7 +157,7 @@ class Pland(CallbackManager, ROSProxy):
     def _detect(self, frame: npt.NDArray):
         """根据图片获取检测结果"""
         if self.detector is None:
-            rospy.logerr_once("No detector!")
+            logger.error("No detector!")
             return None
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         with self.detect_lock:
@@ -172,11 +176,11 @@ class Pland(CallbackManager, ROSProxy):
         计算像素点在相机无roll, pitch的情况下的像素坐标 (虚拟下视相机)
         """
         if self.odom is None:
-            rospy.logerr("No odom")
+            logger.error("No odom")
             return None
 
         if self.camera_info is None:
-            rospy.logerr("No camera_info")
+            logger.error("No camera_info")
             return None
 
         K, K_inv = self.camera_info
@@ -281,7 +285,7 @@ class Pland(CallbackManager, ROSProxy):
         # 发布消息
         self.landing_target_pub.publish(landing_target)
         if self.fps_helper.step(block=False):
-            rospy.loginfo(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
+            logger.info(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
 
     def _pland_cb(self, frame: npt.NDArray):
         detect_result = self._detect(frame)
