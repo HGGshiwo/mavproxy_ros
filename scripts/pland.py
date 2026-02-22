@@ -11,6 +11,7 @@ import numpy as np
 from pupil_apriltags import Detection, Detector
 import cv2
 
+from event_callback.event_callback.event_callback.utils import rospy_init_node
 from event_callback.utils import rosparam_field, setup_logger
 from event_callback import ros
 from event_callback.utils import ROSProxy, rostopic_field
@@ -358,5 +359,6 @@ class Pland(CallbackManager, ROSProxy):
 
 
 if __name__ == "__main__":
+    rospy_init_node("pland")
     pland = Pland()
     rospy.spin()

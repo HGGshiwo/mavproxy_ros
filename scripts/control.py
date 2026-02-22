@@ -8,6 +8,7 @@ from typing import Any, List, Optional
 from base.ctrl_node import Runner
 from event_callback import ros, http_proxy
 from event_callback.core import CallbackManager
+from event_callback.event_callback.event_callback.utils import rospy_init_node
 from event_callback.utils import ROSProxy, rosparam_field, setup_logger, throttle
 from control_model import *
 from base.pid_controller import PIDController
@@ -1307,5 +1308,6 @@ class Control(CallbackManager, ROSProxy):
 
 
 if __name__ == "__main__":
+    rospy_init_node("control")
     control_node = Control()
     rospy.spin()

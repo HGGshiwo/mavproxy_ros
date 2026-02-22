@@ -10,6 +10,7 @@ from event_callback.components.http.message_handler import (
 )
 from event_callback.components.ros import ROSConfig
 from event_callback.core import CallbackManager
+from event_callback.event_callback.event_callback.utils import rospy_init_node
 from event_callback.utils import print_logger_info, setup_logger
 import rospy
 from std_msgs.msg import UInt32, Float64
@@ -89,7 +90,8 @@ class Connection(CallbackManager):
 if __name__ == "__main__":
     setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
     
-
+    rospy_init_node("connection")
+    
     Connection(
         [
             HTTPConfig(

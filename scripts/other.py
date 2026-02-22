@@ -5,6 +5,7 @@ from base.node import SUCCESS_RESPONSE, Node
 from base.utils import post_json
 from event_callback import http_proxy, ros
 from event_callback.core import CallbackManager
+from event_callback.event_callback.event_callback.utils import rospy_init_node
 from event_callback.utils import setup_logger
 import rospy
 from std_msgs.msg import String
@@ -167,5 +168,6 @@ class Other(CallbackManager):
 
 
 if __name__ == "__main__":
+    rospy_init_node("other")
     node = Other()
     rospy.spin()

@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from base.node import SUCCESS_RESPONSE, Node
 from event_callback.core import CallbackManager
+from event_callback.event_callback.event_callback.utils import rospy_init_node
 from event_callback.utils import setup_logger
 from mavros_msgs.srv import ParamPull, ParamSet
 from mavros_msgs.msg import Param, ParamValue
@@ -134,5 +135,6 @@ class Param(CallbackManager):
 
 
 if __name__ == "__main__":
+    rospy_init_node("other")
     node = Param()
     rospy.spin()
