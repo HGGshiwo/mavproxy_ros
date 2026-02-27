@@ -1,0 +1,590 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+
+from base.controller.base_controller import BaseController
+import math
+import struct
+import threading
+import time
+from typing import Optional
+
+from event_callback.components.http.core import HTTPConfig
+from event_callback.components.http.message_handler import MessageType
+from event_callback.utils import setup_logger
+from dog_utils import *
+from event_callback.components.socket import (
+    SocketClientConfig,
+    SocketServerConfig,
+    socketc,
+    sockets,
+)
+from event_callback import http
+from event_callback import CallbackManager
+from logging import getLogger
+import rospy
+from nav_msgs.msg import Odometry
+
+logger = getLogger(__file__)
+setup_logger()
+
+
+def router(data: bytes):
+    """路由函数：解析指令码并返回对应的CommandType"""
+    try:
+        command_id = struct.unpack("<I", data[0:4])[0]
+        return CommandType(command_id)
+    except Exception as e:
+        print(f"指令解析失败！data: 0x{data.hex()}, error: {e}")
+        return None
+
+
+# host = "localhost"
+host = "192.168.3.20"  # 实际机器人IP（无线接入）
+# host = "192.168.1.103"  # 有线接入IP
+# host = "192.168.2.103"  # 通讯接口IP
+# server_host = "192.168.3.157"
+server_host = "localhost"
+server_port = 43893
+
+
+class DrogController(CallbackManager, BaseController):
+    def __init__(self):
+        # 组件配置
+        config = [
+            SocketServerConfig(
+                host="0.0.0.0",
+                port=server_port,
+                socket_type="udp",
+                register=False,
+                decode=False,
+                router=router,
+            ),
+            SocketClientConfig(
+                host=host,
+                port=43893,
+                register=False,
+                socket_type="udp",
+                decode=False,
+                router=router,
+            ),
+            HTTPConfig(port=8001),
+        ]
+
+        self.max_backward_vel = None
+        self.max_forward_vel = None
+        self.v_max_lock = threading.Lock()
+        self.basic_state = None
+        self.is_run = None  # 是否是跑步步态
+        self.paltform_height = None  # 0 匍匐, 2 站立, 无法从上报状态读出
+        super().__init__(config)
+
+        # 订阅 ENU odom，用于位置控制
+        self._odom: Optional[Odometry] = None
+        self._odom_lock = threading.Lock()
+        rospy.Subscriber(
+            "/mavros/local_position/odom",
+            Odometry,
+            self._odom_callback,
+            queue_size=1,
+        )
+
+        # 位置控制后台线程管理
+        self._pos_ctrl_thread: Optional[threading.Thread] = None
+        self._pos_ctrl_stop = threading.Event()
+        self._pos_ctrl_lock = threading.Lock()
+
+        heartbeat_t = threading.Thread(
+            target=self.heartbeat_thread,
+            daemon=True,
+            name="heartbeat-thread",
+        )
+        heartbeat_t.start()
+        logger.info("心跳线程已启动（2Hz）")
+
+    def do_takeoff(self, alt: float):
+        """起立"""
+        data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
+        socketc.send_to_server(self, data)
+
+    def do_land(self):
+        data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
+        socketc.send_to_server(self, data)
+
+    def _odom_callback(self, msg: Odometry):
+        with self._odom_lock:
+            self._odom = msg
+
+    def _get_current_pos_enu(self) -> Optional[list]:
+        """获取当前 ENU 坐标系下的位置 [x, y, z]"""
+        with self._odom_lock:
+            if self._odom is None:
+                return None
+            pos = self._odom.pose.pose.position
+            return [pos.x, pos.y, pos.z]
+
+    def _get_current_yaw_enu(self) -> float:
+        """获取当前 ENU 坐标系下的 yaw 角（rad）"""
+        with self._odom_lock:
+            if self._odom is None:
+                return 0.0
+            q = self._odom.pose.pose.orientation
+            # 四元数转 yaw
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            return math.atan2(siny_cosp, cosy_cosp)
+
+    @staticmethod
+    def _vel_to_axis(
+        vx_body: float, vy_body: float, yaw_rate: float, max_vel: float = 1.0
+    ) -> tuple:
+        """将机体系速度（m/s）映射到 [-1000, 1000] 的轴指令"""
+        scale = 1000.0 / max(max_vel, 1e-6)
+        left_x = int(max(-1000, min(1000, vx_body * scale)))
+        left_y = int(max(-1000, min(1000, vy_body * scale)))
+        right_x = int(max(-1000, min(1000, yaw_rate * scale)))
+        return left_x, left_y, right_x
+
+    def do_send_cmd(
+        self,
+        *,
+        p=None,
+        v=None,
+        a=None,
+        yaw=None,
+        yaw_rate=None,
+        frame: Optional[str] = "enu",
+    ):
+        """
+        发送运动指令。
+
+        - 速度控制（v 不为 None，p 为 None）：发送一次轴指令即返回。
+        - 位置控制（p 不为 None）：在后台线程中持续发送，直到到达目标位置。
+
+        frame:
+          "enu"  — ENU坐标系下: x为E, y为N, z为U
+          "body" — 机体坐标系下: x为前, y为左, z为下
+        """
+        resolved_frame: str = frame if frame is not None else "enu"
+        if p is not None:
+            # ---- 位置控制 ----
+            self._start_position_control(p, yaw, resolved_frame)
+        elif v is not None:
+            # ---- 速度控制 ----
+            self._stop_position_control()
+            self._send_velocity_cmd(v, yaw_rate, resolved_frame)
+        else:
+            # 无有效指令，发送零速停止
+            self._stop_position_control()
+            self.move_axis_no_dead_zone(0, 0, 0, 0)
+
+    # ---- 速度控制 ----
+
+    def _send_velocity_cmd(self, v: list, yaw_rate: Optional[float], frame: str):
+        """将速度指令转换为轴指令并发送一次"""
+        vx, vy = float(v[0]), float(v[1]) if len(v) > 1 else 0.0
+        yr = float(yaw_rate) if yaw_rate is not None else 0.0
+
+        if frame == "enu":
+            # ENU → 机体坐标系：需要根据当前 yaw 旋转
+            cur_yaw = self._get_current_yaw_enu()
+            vx_body, vy_body = self._enu_vel_to_body(vx, vy, cur_yaw)
+        elif frame == "body":
+            vx_body, vy_body = vx, vy
+        else:
+            raise ValueError(f"不支持的坐标系: {frame}")
+
+        with self.v_max_lock:
+            max_vel = self.max_forward_vel if self.max_forward_vel else 1.0
+
+        left_x, left_y, right_x = self._vel_to_axis(vx_body, vy_body, yr, max_vel)
+        self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
+
+    # ---- 位置控制 ----
+
+    def _start_position_control(
+        self, target_p: list, target_yaw: Optional[float], frame: str
+    ):
+        """停止旧的位置控制线程，启动新的位置控制线程"""
+        self._stop_position_control()
+
+        with self._pos_ctrl_lock:
+            self._pos_ctrl_stop.clear()
+            self._pos_ctrl_thread = threading.Thread(
+                target=self._position_control_loop,
+                args=(target_p, target_yaw, frame),
+                daemon=True,
+                name="pos-ctrl-thread",
+            )
+            self._pos_ctrl_thread.start()
+
+    def _stop_position_control(self):
+        """停止当前位置控制线程（如存在）"""
+        with self._pos_ctrl_lock:
+            if self._pos_ctrl_thread and self._pos_ctrl_thread.is_alive():
+                self._pos_ctrl_stop.set()
+                self._pos_ctrl_thread.join(timeout=2.0)
+                self._pos_ctrl_thread = None
+
+    def _position_control_loop(
+        self, target_p: list, target_yaw: Optional[float], frame: str
+    ):
+        """
+        位置控制循环（后台线程）：用简单比例控制不断发送速度指令，
+        直到到达目标位置（XY 误差 < 阈值）或被外部停止。
+        """
+        POS_THRESHOLD = 0.15  # 到位阈值 (m)
+        KP = 1.0  # 比例增益
+        MAX_VEL = 0.5  # 最大控制速度 (m/s)
+        RATE = 20  # 控制频率 (Hz)
+        dt = 1.0 / RATE
+
+        tx = float(target_p[0])
+        ty = float(target_p[1]) if len(target_p) > 1 else 0.0
+
+        # 目标 yaw（仅在 ENU 模式下支持）
+        target_yaw_val = float(target_yaw) if target_yaw is not None else None
+
+        logger.info(f"位置控制启动: target=({tx:.2f}, {ty:.2f}), frame={frame}")
+
+        while not self._pos_ctrl_stop.is_set():
+            cur_pos = self._get_current_pos_enu()
+            if cur_pos is None:
+                logger.warning("尚未收到 odom，等待...")
+                time.sleep(dt)
+                continue
+
+            if frame == "enu":
+                ex = tx - cur_pos[0]
+                ey = ty - cur_pos[1]
+            elif frame == "body":
+                # body 目标需要先转换到 ENU 再计算误差
+                cur_yaw = self._get_current_yaw_enu()
+                tx_enu = cur_pos[0] + tx * math.cos(cur_yaw) - ty * math.sin(cur_yaw)
+                ty_enu = cur_pos[1] + tx * math.sin(cur_yaw) + ty * math.cos(cur_yaw)
+                ex = tx_enu - cur_pos[0]
+                ey = ty_enu - cur_pos[1]
+            else:
+                raise ValueError(f"不支持的坐标系: {frame}")
+
+            dist = math.sqrt(ex**2 + ey**2)
+            if dist < POS_THRESHOLD:
+                logger.info(f"已到达目标位置，误差={dist:.3f}m")
+                # 发送零速停止
+                self.move_axis_no_dead_zone(0, 0, 0, 0)
+                break
+
+            # 比例控制，限幅
+            scale = min(KP, MAX_VEL / max(dist, 1e-6))
+            vx_enu = ex * scale
+            vy_enu = ey * scale
+
+            # 转换到机体系
+            cur_yaw = self._get_current_yaw_enu()
+            vx_body, vy_body = self._enu_vel_to_body(vx_enu, vy_enu, cur_yaw)
+
+            # yaw 控制（如有目标 yaw）
+            yr = 0.0
+            if target_yaw_val is not None:
+                yaw_err = target_yaw_val - cur_yaw
+                # 归一化到 [-pi, pi]
+                yaw_err = (yaw_err + math.pi) % (2 * math.pi) - math.pi
+                yr = max(-1.0, min(1.0, yaw_err * KP))
+
+            with self.v_max_lock:
+                max_vel = self.max_forward_vel if self.max_forward_vel else MAX_VEL
+
+            left_x, left_y, right_x = self._vel_to_axis(vx_body, vy_body, yr, max_vel)
+            self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
+
+            time.sleep(dt)
+
+        logger.info("位置控制线程退出")
+
+    @staticmethod
+    def _enu_vel_to_body(vx_enu: float, vy_enu: float, yaw: float) -> tuple:
+        """ENU 速度旋转到机体系（FLU：x=前, y=左）"""
+        vx_body = vx_enu * math.cos(yaw) + vy_enu * math.sin(yaw)
+        vy_body = -vx_enu * math.sin(yaw) + vy_enu * math.cos(yaw)
+        return vx_body, vy_body
+
+    def check_alt(self, rel_alt, min_alt_threshold, target, threshold):
+        return True
+
+    def check_hover(self, arm, rel_alt):
+        return self.basic_state in [1, 2, 3, 0x10]
+
+    def move_raw_old(
+        self,
+        x: Optional[float] = None,
+        y: Optional[float] = None,
+        yaw: Optional[float] = None,
+    ):
+        """虚拟摇杆的三轴运动控制（X/Y轴速度 + Yaw角速度），机体左手坐标系FRU
+        :param x: 摇杆偏移机体X轴控制(对应摇杆Y)
+        :param y: 摇杆偏移机体Y轴控制(对应摇杆X)
+        :param yaw: Yaw摇杆
+        """
+        if x is not None:
+            data = pack_q25_udp_cmd(CommandType.MOVE_X_AXIS, parameter_size=x)
+            socketc.send_to_server(self, data)
+
+        if y is not None:
+            data = pack_q25_udp_cmd(CommandType.MOVE_Y_AXIS, parameter_size=y)
+            socketc.send_to_server(self, data)
+
+        if yaw is not None:
+            data = pack_q25_udp_cmd(CommandType.MOVE_YAW_AXIS, parameter_size=yaw)
+            socketc.send_to_server(self, data)
+
+    def move_axis_no_dead_zone(
+        self,
+        left_x: int = 0,
+        left_y: int = 0,
+        right_x: int = 0,
+        right_y: int = 0,
+    ):
+        """【新无死区】三轴运动控制（推荐使用），机体坐标系FLU，
+        注意这个API的xy是相反的，和文档不一样
+
+        :param left_x: X轴速度（-1000~1000，正向前）
+        :param left_y: Y轴速度（-1000~1000，正向左）
+        :param right_x: Yaw角速度（-1000~1000，正左转）
+        :param right_y: 预留（固定为0）
+        """
+        # 校验参数范围
+        left_x, left_y = left_y, left_x
+        left_x = max(-1000, min(1000, left_x))
+        left_y = max(-1000, min(1000, left_y))
+        right_x = max(-1000, min(1000, right_x))
+        right_y = 0  # 强制预留字段为0
+        axis_data = AxisCommand(
+            left_x=left_x, left_y=left_y, right_x=right_x, right_y=right_y
+        )
+
+        # 打包并发送指令（50Hz频率由调用方保证或新增线程控制）
+        data = pack_q25_udp_cmd(
+            command_type=CommandType.AXIS_COMMAND_NO_DEAD_ZONE,
+            parameter_size=len(axis_data.to_bytes()),
+            data=axis_data,
+        )
+        socketc.send_to_server(self, data)
+
+    # ===================== 接收类指令（SOCKET监听）=====================
+    @sockets.recv(CommandType.MOTION_STATE_REPORT, frequency=1)
+    def motion_state_report(self, data: bytes):
+        """接收运动状态数据（200Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, MotionStateData):
+            return
+        with self.v_max_lock:
+            self.max_forward_vel = data_obj.max_forward_vel
+            self.max_backward_vel = data_obj.max_backward_vel
+        # 修正gait_desc判断（文档：0x20=行走，0x23=跑步）
+        gait_desc = "未知步态"
+        if data_obj.gait_state == 0x20:
+            gait_desc = "行走"
+        elif data_obj.gait_state == 0x23:
+            gait_desc = "跑步"
+
+        _json_data = {
+            "basic_state": data_obj.basic_state,
+            "gait_state": data_obj.gait_state,
+            "gait_desc": gait_desc,
+            "max_forward_vel": round(data_obj.max_forward_vel, 2),
+            "max_backward_vel": round(data_obj.max_backward_vel, 2),
+            "position": [
+                round(data_obj.pos_x, 3),
+                round(data_obj.pos_y, 3),
+                round(data_obj.pos_yaw, 3),
+            ],
+            "position_desc": f"{data_obj.pos_x:.1f}, {data_obj.pos_y:.1f}, {data_obj.pos_yaw:.1f}",
+            "velocity": [
+                round(data_obj.vel_x, 3),
+                round(data_obj.vel_y, 3),
+                round(data_obj.vel_yaw, 3),
+            ],
+            "run_distance": round(data_obj.robot_distance, 1),
+            "charge_state": data_obj.auto_charge_state,
+        }
+
+        # 补充basic_state=0x10（L模式）映射
+        state_map = {
+            0: "趴下状态",
+            1: "正在起立状态",
+            2: "初始站立状态",
+            3: "力控站立状态",
+            4: "踏步状态",
+            5: "正在趴下状态",
+            6: "软急停/摔倒状态",
+            0x10: "L模式",
+        }
+        basic_state_desc = state_map.get(
+            data_obj.basic_state, f"未知状态({data_obj.basic_state})"
+        )
+        self.basic_state = data_obj.basic_state
+        self.is_run = data_obj.gait_state == 0x23
+        http.ws_send(
+            self,
+            dict(
+                basic_state_desc=basic_state_desc,
+                gait_desc=gait_desc,
+                max_forward_vel=data_obj.max_forward_vel,
+                max_backward_vel=data_obj.max_backward_vel,
+            ),
+            MessageType.STATE,
+        )
+
+    @sockets.recv(CommandType.RUN_STATUS_REPORT, frequency=1)
+    def run_status_report(self, data: bytes):
+        """接收运行状态数据（200Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, RcsData):
+            return
+        json_data = {
+            "robot_name": data_obj.robot_name,
+            "current_milege": data_obj.current_milege,
+            "total_milege": data_obj.total_milege,
+            "current_run_time": data_obj.current_run_time,
+            "total_run_time": data_obj.total_run_time,
+            "motion_mode": "导航" if data_obj.is_nav_mode == 1 else "手动",
+            "joystick": {
+                "lx": round(data_obj.joystick_lx, 3),
+                "ly": round(data_obj.joystick_ly, 3),
+                "rx": round(data_obj.joystick_rx, 3),
+                "ry": round(data_obj.joystick_ry, 3),
+            },
+            "errors": {
+                "imu_error": data_obj.imu_error,
+                "wifi_error": data_obj.wifi_error,
+                "driver_heat_warn": data_obj.driver_heat_warn,
+                "driver_error": data_obj.driver_error,
+                "motor_heat_warn": data_obj.motor_heat_warn,
+                "battery_low_warn": data_obj.battery_low_warn,
+            },
+        }
+        http.ws_send(self, json_data, MessageType.STATE)
+
+    @sockets.recv(CommandType.SENSOR_DATA_REPORT, frequency=10)
+    def sensor_data_report(self, data: bytes):
+        """接收运动控制传感器数据（200Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, ControllerSensorData):
+            return
+        imu = data_obj.imu_data
+        json_data = {
+            "imu": {
+                "timestamp": imu.timestamp,
+                "angle": [round(imu.roll, 2), round(imu.pitch, 2), round(imu.yaw, 2)],
+                "angular_vel": [
+                    round(imu.omega_x, 3),
+                    round(imu.omega_y, 3),
+                    round(imu.omega_z, 3),
+                ],
+                "acceleration": [
+                    round(imu.acc_x, 3),
+                    round(imu.acc_y, 3),
+                    round(imu.acc_z, 3),
+                ],
+            },
+            "joint_pos": self._format_joint_data(data_obj.joint_pos),
+            "joint_vel": self._format_joint_data(data_obj.joint_vel),
+            "joint_torque": self._format_joint_data(data_obj.joint_tau),
+        }
+        # http.ws_send(self, json_data, MessageType.STATE)
+
+    @sockets.recv(CommandType.CONTROLLER_SAFE_DATA_REPORT, frequency=1)
+    def controller_safe_report(self, data: bytes):
+        """接收运动控制系统数据（1Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, ControllerSafeData):
+            return
+        json_data = {
+            "motor_temperatures": [
+                round(temp, 1) for temp in data_obj.motor_temperatures
+            ],
+            "driver_temperatures": data_obj.driver_temperatures,
+            "cpu": {
+                "temperature": round(data_obj.cpu_info.temperature, 1),
+                "frequency": round(data_obj.cpu_info.frequency, 0),
+            },
+        }
+        http.ws_send(self, json_data, MessageType.STATE)
+
+    @sockets.recv(CommandType.BATTERY_LEVEL_REPORT, frequency=10)
+    def battery_level_report(self, data: bytes):
+        """接收电池电量数据（0.5Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, BatteryLevel):
+            return
+        json_data = {"type": "battery_level", "level": data_obj.level}
+        http.ws_send(self, json_data, MessageType.STATE)
+
+    @sockets.recv(CommandType.BATTERY_CHARGE_STATE_REPORT, frequency=10)
+    def battery_charge_report(self, data: bytes):
+        """接收电池充电状态数据（0.5Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, BatteryChargeState):
+            return
+        json_data = {
+            "level": data_obj.level,
+            "is_charging": data_obj.is_charging,
+            "charge_desc": "充电中" if data_obj.is_charging else "未充电",
+        }
+        http.ws_send(self, json_data, MessageType.STATE)
+
+    @sockets.recv(CommandType.ERROR_CODE_REPORT, frequency=10)
+    def error_code_report(self, data: bytes):
+        """接收错误码数据"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, ErrorCode):
+            return
+        level_desc = {0: "通知", 1: "警告", 2: "错误"}
+        json_data = {
+            "error_level": data_obj.error_level,
+            "level_desc": level_desc.get(data_obj.error_level, "未知"),
+            "error_code": hex(data_obj.error_code),
+            "error_msg": data_obj.error_msg,
+        }
+        http.ws_send(self, json_data, MessageType.STATE)
+
+    # ===================== 辅助工具方法 =====================
+
+    @staticmethod
+    def _format_joint_data(joint_data: LegJointData) -> dict:
+        """格式化关节数据（位置/速度/力矩）"""
+        return {
+            "fl": {  # 左前腿
+                "hipx": round(joint_data.fl_hipx, 3),
+                "hipy": round(joint_data.fl_hipy, 3),
+                "knee": round(joint_data.fl_knee, 3),
+            },
+            "fr": {  # 右前腿
+                "hipx": round(joint_data.fr_hipx, 3),
+                "hipy": round(joint_data.fr_hipy, 3),
+                "knee": round(joint_data.fr_knee, 3),
+            },
+            "hl": {  # 左后腿
+                "hipx": round(joint_data.hl_hipx, 3),
+                "hipy": round(joint_data.hl_hipy, 3),
+                "knee": round(joint_data.hl_knee, 3),
+            },
+            "hr": {  # 右后腿
+                "hipx": round(joint_data.hr_hipx, 3),
+                "hipy": round(joint_data.hr_hipy, 3),
+                "knee": round(joint_data.hr_knee, 3),
+            },
+        }
+
+    # ===================== 心跳发送线程（2Hz）=====================
+    def heartbeat_thread(self):
+        """心跳指令发送线程（按文档要求2Hz频率）"""
+        while True:
+            try:
+                # 打包手动模式心跳指令（指令值0，基本指令）
+                data = pack_q25_udp_cmd(CommandType.MANUAL_HEARTBEAT, parameter_size=0)
+                # 直接通过socketc发送
+                socketc.send_to_server(self, data)
+                time.sleep(0.5)  # 2Hz = 每0.5秒一次
+            except Exception as e:
+                print(f"心跳发送失败：{e}")
+                time.sleep(0.5)

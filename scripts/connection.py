@@ -23,6 +23,7 @@ from ui import *
 
 logger = logging.getLogger(__file__)
 
+
 class MessageType(_MessageType):
     EVENT = EventMessageHandler.create("event")
 
@@ -89,9 +90,9 @@ class Connection(CallbackManager):
 
 if __name__ == "__main__":
     setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
-    
+
     rospy_init_node("connection")
-    
+
     Connection(
         [
             HTTPConfig(

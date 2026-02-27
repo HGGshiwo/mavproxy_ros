@@ -37,7 +37,7 @@ class PIDController:
         - output: PID 输出值（比如控制加热器的功率、电机的电压）
         """
         # 1. 计算当前误差（目标值 - 实际值）
-        error = current_value - self.setpoint 
+        error = current_value - self.setpoint
 
         # 2. 计算时间差（dt），首次调用时 dt 设为 0，避免除以 0
         if self.last_time is None:

@@ -57,7 +57,9 @@ PrimaryButtonConfig(
     target=ToastConfig(url="/set_mode", method="POST", data=dict(mode="LAND")),
 )
 PrimaryButtonConfig(name="精准降落", target=ToastConfig(url="/land", method="POST"))
-PrimaryButtonConfig(name="重启飞控", target=ToastConfig(url="/reboot_fcu", method="POST"))
+PrimaryButtonConfig(
+    name="重启飞控", target=ToastConfig(url="/reboot_fcu", method="POST")
+)
 PrimaryButtonConfig(
     name="输入航点",
     target=FormConfig(
@@ -71,12 +73,16 @@ PrimaryButtonConfig(
         ),
     ),
 )
-PrimaryButtonConfig(name="获取航点", target=CopyConfig(url="/get_waypoint", method="GET"))
+PrimaryButtonConfig(
+    name="获取航点", target=CopyConfig(url="/get_waypoint", method="GET")
+)
 PrimaryButtonConfig(name="获取GPS", target=CopyConfig(url="/get_gps", method="GET"))
 PrimaryButtonConfig(name="获取GPSv2", target=CopyConfig(url="/get_gpsv2", method="GET"))
 
 
-PrimaryButtonConfig(name="停止跟随", target=ToastConfig(url="/stop_follow", method="POST"))
+PrimaryButtonConfig(
+    name="停止跟随", target=ToastConfig(url="/stop_follow", method="POST")
+)
 
 PrimaryButtonConfig(
     name="启用pland", target=ToastConfig(url="/start_pland", method="POST")
@@ -88,7 +94,9 @@ PrimaryButtonConfig(
 PrimaryButtonConfig(
     name="启用避障", target=ToastConfig(url="/start_planner", method="POST")
 )
-PrimaryButtonConfig(name="关闭避障", target=ToastConfig(url="/stop_planner", method="POST"))
+PrimaryButtonConfig(
+    name="关闭避障", target=ToastConfig(url="/stop_planner", method="POST")
+)
 
 PrimaryButtonConfig(
     name="开启检测",
@@ -106,7 +114,9 @@ PrimaryButtonConfig(
         ),
     ),
 )
-PrimaryButtonConfig(name="关闭检测", target=ToastConfig(url="/stop_detect", method="POST"))
+PrimaryButtonConfig(
+    name="关闭检测", target=ToastConfig(url="/stop_detect", method="POST")
+)
 
 PrimaryButtonConfig(
     name="开始录制",
@@ -118,7 +128,9 @@ PrimaryButtonConfig(
         ),
     ),
 )
-PrimaryButtonConfig(name="结束录制", target=ToastConfig(url="/stop_record", method="POST"))
+PrimaryButtonConfig(
+    name="结束录制", target=ToastConfig(url="/stop_record", method="POST")
+)
 
 PrimaryButtonConfig(
     name="云台控制",

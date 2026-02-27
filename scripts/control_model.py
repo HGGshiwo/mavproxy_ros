@@ -1,4 +1,4 @@
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional, Tuple
 from pydantic import BaseModel
 
 
@@ -16,6 +16,16 @@ class SetWaypointModel(BaseModel):
     speed: float = None
     land: bool = False
     rtl: bool = False
+
+
+class SetPosVelModel(BaseModel):
+    pos: Tuple[float, float, float]  # 目标点, 到达速度=0
+    vel: float  # 最大速度限制
+    yaw: Optional[float] = None  # 到达后的期望偏航
+    fix_yaw: Optional[bool] = (
+        True  # True: 运动中始终固定为初始航向/False: 调整为目标点后再运动
+    )
+    timeout: Optional[float] = 2  # 接口超时时间
 
 
 # Other

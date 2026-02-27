@@ -9,6 +9,7 @@ from mavros_msgs.srv import ParamSet, ParamSetResponse
 from mavros_msgs.srv import ParamGet, ParamGetResponse
 from mavros_msgs.srv import ParamPull, ParamPullResponse
 
+
 def arming_callback(req):
     rospy.loginfo("Dummy arming service called")
     return CommandBoolResponse(success=True)
@@ -33,9 +34,11 @@ def paramset_callback(req):
     rospy.loginfo("Dummy param set called")
     return ParamSetResponse()
 
+
 def paramget_callback(req):
     rospy.loginfo("Dummy param get called")
     return ParamGetResponse(success=True)
+
 
 def parampull_callback(req):
     rospy.loginfo("Dummy param pull called")

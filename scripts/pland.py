@@ -30,6 +30,7 @@ from geometry_msgs.msg import Quaternion
 logger = logging.getLogger(__name__)
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
+
 class Pland(CallbackManager, ROSProxy):
     def __init__(
         self,
@@ -286,7 +287,9 @@ class Pland(CallbackManager, ROSProxy):
         # 发布消息
         self.landing_target_pub.publish(landing_target)
         if self.fps_helper.step(block=False):
-            logger.info(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
+            logger.info(
+                f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}"
+            )
 
     def _pland_cb(self, frame: npt.NDArray):
         detect_result = self._detect(frame)
