@@ -1,8 +1,8 @@
-import struct
-from enum import IntEnum, unique
-from typing import Optional, Union, List, Dict, Any
-from dataclasses import dataclass
 import ctypes
+import struct
+from dataclasses import dataclass
+from enum import IntEnum, unique
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from event_callback.utils import classproperty
 
@@ -17,11 +17,12 @@ def to_int32(data):
     return ctypes.c_int32(data).value
 
 
+
+
 # -------------------------- 核心枚举（控制指令+状态上报指令） --------------------------
 @unique
 class CommandType(IntEnum):
     """天狼Q25机器人指令枚举（控制指令+状态上报指令）"""
-
     # 控制指令（新增无死区轴指令）
     MANUAL_HEARTBEAT = 0x21040001
     ENTER_L_MODE = 0x21010220
@@ -44,7 +45,6 @@ class CommandType(IntEnum):
     UPPER_POWER_SWITCH = 0x80110801  # 上装上下电开关
     DRIVER_JOINT_DATA_SWITCH = 0x80110201  # 允许发布驱动器及关节采样数据开关
     STATE_DATA_SWITCH = 0x80110202  # 允许发布状态数据开关
-
     # 状态上报指令
     RUN_STATUS_REPORT = 0x1008
     MOTION_STATE_REPORT = 0x1009
@@ -57,7 +57,9 @@ class CommandType(IntEnum):
 
 # -------------------------- 指令属性映射表 --------------------------
 # fmt: off
-command_info_map: Dict[CommandType, tuple[str, int, str]] = {
+command_info_map: Dict[
+    CommandType, Tuple[str, int, str]
+] = {
     # 控制指令
     CommandType.MANUAL_HEARTBEAT: ("手动模式下心跳指令", 0, "/heartbeat/manual"),
     CommandType.ENTER_L_MODE: ("进入L模式指令", 0, "/l-mode/enter"),
@@ -81,20 +83,27 @@ command_info_map: Dict[CommandType, tuple[str, int, str]] = {
     CommandType.RUN_STATUS_REPORT: ("运行状态数据上报", 1, "/report/run-status"),
     CommandType.MOTION_STATE_REPORT: ("运动状态数据上报", 1, "/report/motion-state"),
     CommandType.SENSOR_DATA_REPORT: ("运动控制传感器数据上报", 1, "/report/sensor-data"),
-    CommandType.CONTROLLER_SAFE_DATA_REPORT: ("运动控制系统数据上报", 1, "/report/controller-safe-data"),
+    CommandType.CONTROLLER_SAFE_DATA_REPORT: (
+        "运动控制系统数据上报", 1, "/report/controller-safe-data"
+    ),
     CommandType.BATTERY_LEVEL_REPORT: ("电池电量状态上报", 0, "/report/battery/level"),
-    CommandType.BATTERY_CHARGE_STATE_REPORT: ("电池充电状态上报", 0, "/report/battery/charge-state"),
+    CommandType.BATTERY_CHARGE_STATE_REPORT: (
+        "电池充电状态上报", 0, "/report/battery/charge-state"
+    ),
     CommandType.ERROR_CODE_REPORT: ("错误码上报", 0, "/report/error-code"),
     CommandType.UPPER_POWER_SWITCH: ("上装上下电开关指令", 0, "/advanced/upper-power"),
-    CommandType.DRIVER_JOINT_DATA_SWITCH: ("驱动器及关节采样数据开关指令", 0, "/advanced/data-switch/driver-joint"),
+    CommandType.DRIVER_JOINT_DATA_SWITCH: (
+        "驱动器及关节采样数据开关指令", 0, "/advanced/data-switch/driver-joint"
+    ),
     CommandType.STATE_DATA_SWITCH: ("状态数据开关指令", 0, "/advanced/data-switch/state"),
 }
+
+
 # fmt: on
-
-
 # -------------------------- 数据结构类 --------------------------
 @dataclass
 class BaseCommand:
+
     @classproperty
     def fmt_size(cls) -> int:
         return struct.calcsize(cls.fmt)
@@ -103,7 +112,6 @@ class BaseCommand:
 @dataclass
 class CommandHead:
     """指令头部（12字节）"""
-
     fmt = "<III"  # 公共打包格式
     command_id: int  # uint32_t
     parameter_size: int  # uint32_t
@@ -118,6 +126,7 @@ class CommandHead:
     def from_bytes(cls, data: bytes) -> "CommandHead":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         cmd_id, param_size, cmd_type = struct.unpack(
             cls.fmt, data[: struct.calcsize(cls.fmt)]
         )
@@ -127,7 +136,6 @@ class CommandHead:
 @dataclass
 class FireAim:
     """对准指令数据（12字节）"""
-
     fmt = "<III"  # 公共打包格式
     roll: int  # uint32_t（无效字段）
     pitch: int  # uint32_t（[-10°,17°]对应[1000,1000]）
@@ -140,6 +148,7 @@ class FireAim:
     def from_bytes(cls, data: bytes) -> "FireAim":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         roll, pitch, yaw = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(roll=roll, pitch=pitch, yaw=yaw)
 
@@ -147,7 +156,6 @@ class FireAim:
 @dataclass
 class AxisCommand:
     """无死区轴指令数据（16字节，新增）"""
-
     fmt = "<iiii"  # 公共打包格式
     left_x: int  # uint32_t（X轴速度，[-1000,1000]）
     left_y: int  # uint32_t（Y轴速度，[-1000,1000]）
@@ -163,6 +171,7 @@ class AxisCommand:
     def from_bytes(cls, data: bytes) -> "AxisCommand":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         left_x, left_y, right_x, right_y = struct.unpack(
             cls.fmt, data[: struct.calcsize(cls.fmt)]
         )
@@ -172,7 +181,6 @@ class AxisCommand:
 @dataclass
 class ImuSensorData(BaseCommand):
     """IMU传感器数据（40字节）"""
-
     fmt = "<i9f"  # 公共打包格式
     timestamp: int  # int32_t
     roll: float  # 翻滚角（°）
@@ -204,6 +212,7 @@ class ImuSensorData(BaseCommand):
     def from_bytes(cls, data: bytes) -> "ImuSensorData":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         unpacked = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(
             timestamp=unpacked[0],
@@ -222,7 +231,6 @@ class ImuSensorData(BaseCommand):
 @dataclass
 class LegJointData(BaseCommand):
     """关节数据（48字节）"""
-
     fmt = "<12f"  # 公共打包格式
     # 左前腿
     fl_hipx: float  # 侧摆关节
@@ -262,6 +270,7 @@ class LegJointData(BaseCommand):
     def from_bytes(cls, data: bytes) -> "LegJointData":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         unpacked = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(
             fl_hipx=unpacked[0],
@@ -282,7 +291,6 @@ class LegJointData(BaseCommand):
 @dataclass
 class CpuInfo:
     """CPU状态数据（8字节）"""
-
     fmt = "<ff"  # 公共打包格式
     temperature: float  # 温度（℃）
     frequency: float  # 主频（MHz）
@@ -294,15 +302,17 @@ class CpuInfo:
     def from_bytes(cls, data: bytes) -> "CpuInfo":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         temp, freq = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(temperature=temp, frequency=freq)
+
+
 
 
 # -------------------------- 状态上报核心数据类 --------------------------
 @dataclass
 class RcsData:
     """运行状态数据（76字节）"""
-
     fmt = "<15siiqqqqffff10BI"  # 公共打包格式
     robot_name: str  # char[15]
     current_milege: int  # 本次运行里程（cm，int32_t）
@@ -333,7 +343,6 @@ class RcsData:
         error_bits |= (1 << 2) if self.driver_error else 0
         error_bits |= (1 << 3) if self.motor_heat_warn else 0
         error_bits |= (1 << 4) if self.battery_low_warn else 0
-
         return struct.pack(
             self.fmt,
             robot_name_bytes,
@@ -348,7 +357,7 @@ class RcsData:
             self.joystick_rx,
             self.joystick_ry,
             self.is_nav_mode,
-            *[0] * 9,
+            * [0] * 9,
             error_bits,
         )
 
@@ -356,6 +365,7 @@ class RcsData:
     def from_bytes(cls, data: bytes) -> "RcsData":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         unpacked = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(
             robot_name=unpacked[0].decode("utf-8").rstrip("\x00"),
@@ -382,7 +392,6 @@ class RcsData:
 @dataclass
 class MotionStateData:
     """运动状态数据（56字节）"""
-
     fmt = "<2Bff3f3ffII10B"  # 公共打包格式
     # basic_state取值：0=趴下,1=起立中,2=初始站立,3=力控站立,4=踏步,5=趴下中,6=急停/摔倒,0x10=L模式
     basic_state: int
@@ -429,6 +438,7 @@ class MotionStateData:
     def from_bytes(cls, data: bytes) -> "MotionStateData":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         unpacked = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(
             basic_state=unpacked[0],
@@ -451,7 +461,6 @@ class MotionStateData:
 @dataclass
 class ControllerSensorData:
     """运动控制传感器数据（184字节）"""
-
     imu_data: ImuSensorData
     joint_pos: LegJointData
     joint_vel: LegJointData
@@ -459,10 +468,10 @@ class ControllerSensorData:
 
     def to_bytes(self) -> bytes:
         return (
-            self.imu_data.to_bytes()
-            + self.joint_pos.to_bytes()
-            + self.joint_vel.to_bytes()
-            + self.joint_tau.to_bytes()
+            self.imu_data.to_bytes() +
+            self.joint_pos.to_bytes() +
+            self.joint_vel.to_bytes() +
+            self.joint_tau.to_bytes()
         )
 
     @classmethod
@@ -470,21 +479,21 @@ class ControllerSensorData:
         total_size = ImuSensorData.fmt_size + LegJointData.fmt_size * 3
         if len(data) < total_size:
             raise ValueError(f"至少需要{total_size}字节")
+
         imu = ImuSensorData.from_bytes(data[: ImuSensorData.fmt_size])
         joint_pos = LegJointData.from_bytes(
-            data[
-                ImuSensorData.fmt_size : ImuSensorData.fmt_size + LegJointData.fmt_size
-            ]
+            data[ImuSensorData.fmt_size: ImuSensorData.fmt_size + LegJointData.fmt_size]
         )
         joint_vel = LegJointData.from_bytes(
             data[
-                ImuSensorData.fmt_size
-                + LegJointData.fmt_size : ImuSensorData.fmt_size
-                + LegJointData.fmt_size * 2
+                ImuSensorData.fmt_size +
+                LegJointData.fmt_size: ImuSensorData.fmt_size +
+                LegJointData.fmt_size *
+                2
             ]
         )
         joint_tau = LegJointData.from_bytes(
-            data[ImuSensorData.fmt_size + LegJointData.fmt_size * 2 : total_size]
+            data[ImuSensorData.fmt_size + LegJointData.fmt_size * 2:total_size]
         )
         return cls(
             imu_data=imu, joint_pos=joint_pos, joint_vel=joint_vel, joint_tau=joint_tau
@@ -500,7 +509,6 @@ class ControllerSensorData:
 @dataclass
 class ControllerSafeData:
     """运动控制系统数据（68字节，原Q20ControllerSafeData重命名）"""
-
     fmt = "<12f12Bff"  # 公共打包格式
     motor_temperatures: List[float]  # 12个电机温度（℃）
     driver_temperatures: List[int]  # 12个驱动器温度（℃，uint8_t）
@@ -509,10 +517,11 @@ class ControllerSafeData:
     def to_bytes(self) -> bytes:
         if len(self.motor_temperatures) != 12 or len(self.driver_temperatures) != 12:
             raise ValueError("温度列表必须包含12个元素")
+
         return struct.pack(
             self.fmt,
-            *self.motor_temperatures,
-            *self.driver_temperatures,
+            * self.motor_temperatures,
+            * self.driver_temperatures,
             self.cpu_info.temperature,
             self.cpu_info.frequency,
         )
@@ -521,6 +530,7 @@ class ControllerSafeData:
     def from_bytes(cls, data: bytes) -> "ControllerSafeData":
         if len(data) < struct.calcsize(cls.fmt):
             raise ValueError(f"至少需要{struct.calcsize(cls.fmt)}字节")
+
         unpacked = struct.unpack(cls.fmt, data[: struct.calcsize(cls.fmt)])
         return cls(
             motor_temperatures=list(unpacked[:12]),
@@ -532,7 +542,6 @@ class ControllerSafeData:
 @dataclass
 class BatteryLevel:
     """电池电量状态（12字节）"""
-
     level: int  # 电量（%）
 
     def to_bytes(self) -> bytes:
@@ -551,7 +560,6 @@ class BatteryLevel:
 @dataclass
 class BatteryChargeState:
     """电池充电状态（12字节）"""
-
     level: int  # 电量（%，高24位）
     is_charging: bool  # 低8位：0=未充电，1=充电中
 
@@ -574,11 +582,9 @@ class BatteryChargeState:
 @dataclass
 class ErrorCode:
     """错误码（12字节）"""
-
     error_level: int  # 0=通知，1=警告，2=错误（低8位）
     error_code: int  # 具体错误码（高24位）
     error_msg: str  # 错误描述
-
     _ERROR_MAP = {
         0x00D00101: "IMU故障",
         0x00D00201: "地形图形传输超时",
@@ -626,21 +632,21 @@ def pack_q25_udp_cmd(
     if command_type is None:
         if data is None:
             raise ValueError("基本指令必须指定command_type")
+
         data_type = type(data)
         if data_type not in _DATA_TYPE_TO_COMMAND:
-            raise ValueError(
-                f"仅支持FireAim/AxisCommand类型自动匹配，当前为{data_type}"
-            )
-        command_type = _DATA_TYPE_TO_COMMAND[data_type]
+            raise ValueError(f"仅支持FireAim/AxisCommand类型自动匹配，当前为{data_type}")
 
+        command_type = _DATA_TYPE_TO_COMMAND[data_type]
     if command_type not in command_info_map:
         raise ValueError(f"未定义指令：{command_type}")
+
     cmd_name, cmd_type, url = command_info_map[command_type]
     command_id = int(command_type)
-
     # 校验指令类型与data一致性
     if cmd_type == 0 and data is not None:
         raise ValueError(f"基本指令[{cmd_name}]不支持携带data")
+
     if cmd_type == 1 and data is None:
         raise ValueError(f"扩展指令[{cmd_name}]必须传入data")
 
@@ -652,6 +658,7 @@ def pack_q25_udp_cmd(
             to_uint32(parameter_size),
             to_uint32(cmd_type),
         )
+
     else:
         if isinstance(data, (FireAim, AxisCommand)):
             data_bytes = data.to_bytes()
@@ -659,6 +666,7 @@ def pack_q25_udp_cmd(
             for val in data:
                 if not (0 <= val <= 0xFFFFFFFF):
                     raise ValueError("数据超出uint32_t范围")
+
             data_bytes = struct.pack(f"<{len(data)}I", *data)
         elif isinstance(data, bytes):
             data_bytes = data
@@ -673,12 +681,12 @@ def pack_q25_udp_cmd(
         return struct.pack("<III", command_id, parameter_size, cmd_type) + data_bytes
 
 
-def unpack_q25_udp_cmd(data: bytes) -> tuple[CommandHead, Optional[Any]]:
+def unpack_q25_udp_cmd(data: bytes) -> Tuple[CommandHead, Optional[Any]]:
     # 解包头部
     if len(data) < 12:
         raise ValueError("至少需要12字节指令头部")
-    head = CommandHead.from_bytes(data[:12])
 
+    head = CommandHead.from_bytes(data[:12])
     # 匹配指令类型
     try:
         command_type = CommandType(head.command_id)
@@ -686,43 +694,48 @@ def unpack_q25_udp_cmd(data: bytes) -> tuple[CommandHead, Optional[Any]]:
         raise ValueError(f"未定义指令码：0x{head.command_id:08X}")
 
     cmd_name, cmd_type, url = command_info_map[command_type]
-    data_body = data[12 : 12 + head.parameter_size]
-
+    data_body = data[12: 12 + head.parameter_size]
     # 解码数据体
     if cmd_type == 0:
         if command_type == CommandType.BATTERY_LEVEL_REPORT:
             return head, BatteryLevel.from_bytes(head)
+
         elif command_type == CommandType.BATTERY_CHARGE_STATE_REPORT:
             return head, BatteryChargeState.from_bytes(head)
+
         elif command_type == CommandType.ERROR_CODE_REPORT:
             return head, ErrorCode.from_bytes(head)
+
         else:
             return head, None
+
     else:
         if len(data_body) != head.parameter_size:
             raise ValueError("数据体长度与parameter_size不匹配")
 
         if command_type == CommandType.RUN_STATUS_REPORT:
             return head, RcsData.from_bytes(data_body)
+
         elif command_type == CommandType.MOTION_STATE_REPORT:
             return head, MotionStateData.from_bytes(data_body)
+
         elif command_type == CommandType.SENSOR_DATA_REPORT:
             return head, ControllerSensorData.from_bytes(data_body)
+
         elif command_type == CommandType.CONTROLLER_SAFE_DATA_REPORT:
             return head, ControllerSafeData.from_bytes(data_body)
+
         elif command_type == CommandType.SET_AIM_POSE:
             return head, FireAim.from_bytes(data_body)
+
         elif command_type == CommandType.AXIS_COMMAND_NO_DEAD_ZONE:
             return head, AxisCommand.from_bytes(data_body)
+
         else:
             return head, data_body
 
 
-def speed_to_cmd_value(
-    axis_type: str,
-    speed: float,
-    v_max: float = None,
-) -> int:
+def speed_to_cmd_value(axis_type: str, speed: float, v_max: float = None) -> int:
     if axis_type not in ["x", "y", "yaw"]:
         raise ValueError(f"仅支持'x'/'y'/'yaw'，当前输入：{axis_type}")
 
@@ -737,14 +750,13 @@ def speed_to_cmd_value(
     # Y轴速度 → 左摇杆X轴指令值
     elif axis_type == "y":
         if speed > 0:
-            cmd_value = -((speed / v_max) * 8554 + 24576)
+            cmd_value = - ((speed / v_max) * 8554 + 24576)
         elif speed < 0:
-            cmd_value = -((speed / v_max) * 8554 - 24576)
+            cmd_value = - ((speed / v_max) * 8554 - 24576)
         else:
             cmd_value = 0
     # Yaw角速度 → 右摇杆X轴指令值
     elif axis_type == "yaw":
         cmd_value = -speed * 32768
-
     cmd_value = round(cmd_value)
     return max(-32767, min(32767, cmd_value))

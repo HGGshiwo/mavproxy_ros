@@ -1,19 +1,20 @@
-from logging import getLogger
 import math
+from logging import getLogger
 from typing import List, Optional
 
-from event_callback.utils import rostopic_field
-from base.controller.base_controller import BaseController
 import rospy
-from mavros_msgs.msg import PositionTarget
 from geometry_msgs.msg import Vector3
-from mavros_msgs.srv import SetMode, CommandTOL
+from mavros_msgs.msg import PositionTarget
+from mavros_msgs.srv import CommandTOL, SetMode
+
+from .base_controller import BaseController
 
 HOVER_THRESHOLD = 1  # 判断为悬停状态(绝对高度)
 logger = getLogger(__name__)
 
 
 class DroneController(BaseController):
+
     def __init__(self):
         self.setpoint_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
@@ -66,7 +67,6 @@ class DroneController(BaseController):
         target = PositionTarget()
         target.header.stamp = rospy.Time.now()
         target.header.frame_id = "local_ned"
-
         # 坐标系选择
         target.coordinate_frame = frame
         type_mask = 0
@@ -89,7 +89,6 @@ class DroneController(BaseController):
         if yaw_rate is None:
             type_mask = type_mask | PositionTarget.IGNORE_YAW_RATE
             yaw_rate = 0
-
         # 设置值
         target.position = Vector3(*p)
         target.velocity = Vector3(*v)

@@ -1,31 +1,33 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import json
 from pathlib import Path
-from base.node import SUCCESS_RESPONSE, Node
-from base.utils import post_json
+
+import rospy
 from event_callback import http_proxy, ros
 from event_callback.core import CallbackManager
-from event_callback.event_callback.event_callback.utils import rospy_init_node
+from event_callback.ros_utils import rospy_init_node
 from event_callback.utils import setup_logger
-import rospy
+from rsos_msgs.srv import SetGimbalAngle, StartBagRecord
 from std_msgs.msg import String
-from base.utils import ERROR_RESPONSE
-from rsos_msgs.srv import StartBagRecord
 from std_srvs.srv import Trigger
-import json
-from rsos_msgs.srv import SetGimbalAngle, SetGimbalAngleResponse
+
+from mavproxy_ros.node import ERROR_RESPONSE, SUCCESS_RESPONSE
+from mavproxy_ros.utils import post_json
 
 try:
     from rsos_msgs.srv import SetCameraExposure
 except Exception:
     pass
 from mavros_msgs.msg import SysStatus
-from control_model import *
+
+from mavproxy_ros.control_model import *
 
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 
 class Other(CallbackManager):
+
     def __init__(self):
         super().__init__()
         self.recording = False
@@ -36,8 +38,9 @@ class Other(CallbackManager):
             "smoke": "/UAV0/perception/yolo_detection_smoke/enable_detection",
         }
         self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
-        # fmt: on
 
+
+    # fmt: on
     @ros.topic("/mavros/sys_status", SysStatus)
     def sys_status_cb(self, msg: SysStatus):
         data = {}
@@ -57,6 +60,7 @@ class Other(CallbackManager):
         res = srv(prefix=data.bag_name)
         if not res.success:
             return ERROR_RESPONSE(res.message)
+
         self.ws_pub.publish(json.dumps({"type": "state", "record": True}))
         self.recording = True
         return SUCCESS_RESPONSE(res.message)
@@ -84,6 +88,7 @@ class Other(CallbackManager):
     def get_ros_param(self, name: str):
         try:
             return SUCCESS_RESPONSE(rospy.get_param(name))
+
         except KeyError as e:
             return ERROR_RESPONSE(str(e))
 
@@ -93,6 +98,7 @@ class Other(CallbackManager):
             mode = rospy.get_param("/UAV0/sensor/serial_gimbal/angle_mode", 0)
             angle = rospy.get_param("/UAV0/sensor/serial_gimbal/gimbal_angle", 0)
             return SUCCESS_RESPONSE({"mode": mode, "angle": angle})
+
         except Exception as e:
             return ERROR_RESPONSE(str(e))
 
@@ -104,6 +110,7 @@ class Other(CallbackManager):
         res = srv(mode=data.mode, angle=data.angle)
         if not res.success:
             return ERROR_RESPONSE(res.message)
+
         return SUCCESS_RESPONSE(res.message)
 
     @http_proxy.get("/get_exposure")
@@ -132,6 +139,7 @@ class Other(CallbackManager):
         res = srv(shutter=int(data.shutter), sensitivity=int(data.sensitivity))
         if not res.success:
             return ERROR_RESPONSE(res.message)
+
         return SUCCESS_RESPONSE(res.message)
 
     @http_proxy.post("/start_detect")
@@ -142,6 +150,7 @@ class Other(CallbackManager):
             return ERROR_RESPONSE(
                 f"{data.type} not in {', '.join(self.detect_param.keys())}"
             )
+
         rospy.set_param(self.detect_param[data.type], True)
         self.ws_pub.publish(json.dumps({"type": "state", "detect": data.type}))
         rospy.set_param(self.follow_param_name, True)
@@ -164,6 +173,7 @@ class Other(CallbackManager):
                 if rospy.get_param(param_name, False):
                     out = _out
                     break
+
         return SUCCESS_RESPONSE(out)
 
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 import math
+from argparse import ArgumentParser
+
+import pygame
 import rospy
 from geometry_msgs.msg import Twist
-import pygame
-from argparse import ArgumentParser
 
 key_map = {
     pygame.K_w: ("x", 1.0),
@@ -15,7 +16,6 @@ key_map = {
     pygame.K_DOWN: ("z", -1.0),
     pygame.K_UP: ("z", 1.0),
 }
-
 usage_lines = [
     "Keyboard Control for Robot (cmd_vel)",
     "--------------------------------------",
@@ -44,22 +44,18 @@ def main():
     paser = ArgumentParser()
     paser.add_argument("--topic", type=str, default="/cmd_vel")
     args = paser.parse_args()
-
     rospy.init_node("pygame_teleop")
     pub = rospy.Publisher(args.topic, Twist, queue_size=1)
-
     pygame.init()
     win_width, win_height = 420, 28 * len(usage_lines) + 20
     screen = pygame.display.set_mode((win_width, win_height))
     pygame.display.set_caption("ROS Teleop Instructions")
-
     font = pygame.font.SysFont(None, 24)
     control = {"x": 0.0, "y": 0.0, "z": 0.0, "th": 0.0}
     pressed = set()
     running = True
     clock = pygame.time.Clock()
     last_zero_send = True
-
     while running and not rospy.is_shutdown():
         draw_usage(screen, font)
         pygame.display.flip()
@@ -80,24 +76,21 @@ def main():
                     control[axis] -= value
                     pressed.remove(event.key)
         # 持续发送当前速度
-
         twist = Twist()
         twist.linear.x = control["x"]
         twist.linear.y = control["y"]
         twist.linear.z = control["z"]
         twist.angular.z = control["th"]
-
         control_sum = sum([math.fabs(control[key]) for key in ["x", "y", "z", "th"]])
-
         if control_sum < 1e-3:
             if not last_zero_send:
                 pub.publish(twist)
                 last_zero_send = True
                 continue
+
         else:
             last_zero_send = False
             pub.publish(twist)
-
     pub.publish(Twist())  # 停止
     pygame.quit()
     print("\nExit keyboard teleop.")

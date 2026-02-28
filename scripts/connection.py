@@ -2,24 +2,22 @@
 # -*- coding: utf-8 -*-
 import logging
 from pathlib import Path
+from typing import Any, Dict
+
+import rospy
 from event_callback import http, ros
 from event_callback.components.http.core import HTTPConfig
-from event_callback.components.http.message_handler import (
-    EventMessageHandler,
-    MessageType as _MessageType,
-)
+from event_callback.components.http.message_handler import EventMessageHandler
+from event_callback.components.http.message_handler import MessageType as _MessageType
 from event_callback.components.ros import ROSConfig
 from event_callback.core import CallbackManager
-from event_callback.event_callback.event_callback.utils import rospy_init_node
+from event_callback.ros_utils import rospy_init_node
 from event_callback.utils import print_logger_info, setup_logger
-import rospy
-from std_msgs.msg import UInt32, Float64
-from mavros_msgs.msg import State
+from mavros_msgs.msg import GPSRAW, State, StatusText
 from mavros_msgs.srv import StreamRate, StreamRateRequest
-from mavros_msgs.msg import StatusText
-from mavros_msgs.msg import GPSRAW
-from typing import Dict, Any
-from ui import *
+from std_msgs.msg import Float64, UInt32
+
+from mavproxy_ros.ui import *
 
 logger = logging.getLogger(__file__)
 
@@ -29,6 +27,7 @@ class MessageType(_MessageType):
 
 
 class Connection(CallbackManager):
+
     def __init__(self, component_config=None, mixins=None):
         super().__init__(component_config, mixins)
         self.armed = None  # 是否解锁
@@ -46,15 +45,15 @@ class Connection(CallbackManager):
     def _set_rate(self):
         rospy.wait_for_service("/mavros/set_stream_rate", timeout=3)
         set_rate = rospy.ServiceProxy("/mavros/set_stream_rate", StreamRate)
-
         req = StreamRateRequest()
         req.stream_id = 0
         req.message_rate = 10
         req.on_off = True
         resp = set_rate(req)
         logger.info("set stream done")
-        # print_logger_info()
 
+
+    # print_logger_info()
     @ros.topic("/mavros/state", State)
     def mode_cb(self, data: State):
         if data.armed == False and self.armed != False:
@@ -84,15 +83,14 @@ class Connection(CallbackManager):
     def state_cb(self, data: StatusText):
         if data.severity > StatusText.WARNING:
             return
+
         logger.error(f"{data.severity}, {data.text}")
         self._publish_error(dict(error=data.text))
 
 
 if __name__ == "__main__":
     setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
-
     rospy_init_node("connection")
-
     Connection(
         [
             HTTPConfig(

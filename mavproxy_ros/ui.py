@@ -1,8 +1,9 @@
 from turtle import title
+
 from event_callback.components.http.ui_config import (
     CopyConfig,
     FormConfig,
-    TableColumnConfig,
+    GroupTableFormItemConfig,
     InnerButtonConfig,
     InputFormItemConfig,
     NumberFormItemConfig,
@@ -12,7 +13,6 @@ from event_callback.components.http.ui_config import (
     TableColumnConfig,
     TableConfig,
     ToastConfig,
-    GroupTableFormItemConfig,
 )
 
 StatusConfig("connected", "连接状态")
@@ -22,17 +22,16 @@ StatusConfig("state", "单控模式")
 StatusConfig("gps_nsats", "GPS星数")
 StatusConfig("gps_fix_type", "GPS fix_type")
 StatusConfig("rel_alt", "相对高度")
-StatusConfig("yaw_diff", "偏航误差")
-StatusConfig("alt_diff", "高度误差")
 StatusConfig("dis", "目标距离")
-StatusConfig("wp_idx", "当前航点")
 StatusConfig("planner", "避障状态")
 StatusConfig("version", "version")
-StatusConfig("follow x", "跟随速度X")
-StatusConfig("follow y", "跟随速度Y")
-StatusConfig("follow z", "跟随速度Z")
 StatusConfig("pland", "精准降落状态")
-
+StatusConfig("yaw_diff", "偏航误差", collapse=True)
+StatusConfig("alt_diff", "高度误差", collapse=True)
+StatusConfig("wp_idx", "当前航点", collapse=True)
+StatusConfig("follow x", "跟随速度X", collapse=True)
+StatusConfig("follow y", "跟随速度Y", collapse=True)
+StatusConfig("follow z", "跟随速度Z", collapse=True)
 PrimaryButtonConfig(name="起飞检查", target=ToastConfig(url="/prearms", method="GET"))
 PrimaryButtonConfig(
     name="起飞",
@@ -57,9 +56,7 @@ PrimaryButtonConfig(
     target=ToastConfig(url="/set_mode", method="POST", data=dict(mode="LAND")),
 )
 PrimaryButtonConfig(name="精准降落", target=ToastConfig(url="/land", method="POST"))
-PrimaryButtonConfig(
-    name="重启飞控", target=ToastConfig(url="/reboot_fcu", method="POST")
-)
+PrimaryButtonConfig(name="重启飞控", target=ToastConfig(url="/reboot_fcu", method="POST"))
 PrimaryButtonConfig(
     name="输入航点",
     target=FormConfig(
@@ -73,31 +70,20 @@ PrimaryButtonConfig(
         ),
     ),
 )
-PrimaryButtonConfig(
-    name="获取航点", target=CopyConfig(url="/get_waypoint", method="GET")
-)
+PrimaryButtonConfig(name="获取航点", target=CopyConfig(url="/get_waypoint", method="GET"))
 PrimaryButtonConfig(name="获取GPS", target=CopyConfig(url="/get_gps", method="GET"))
 PrimaryButtonConfig(name="获取GPSv2", target=CopyConfig(url="/get_gpsv2", method="GET"))
-
-
-PrimaryButtonConfig(
-    name="停止跟随", target=ToastConfig(url="/stop_follow", method="POST")
-)
-
+PrimaryButtonConfig(name="停止跟随", target=ToastConfig(url="/stop_follow", method="POST"))
 PrimaryButtonConfig(
     name="启用pland", target=ToastConfig(url="/start_pland", method="POST")
 )
 PrimaryButtonConfig(
     name="关闭pland", target=ToastConfig(url="/stop_pland", method="POST")
 )
-
 PrimaryButtonConfig(
     name="启用避障", target=ToastConfig(url="/start_planner", method="POST")
 )
-PrimaryButtonConfig(
-    name="关闭避障", target=ToastConfig(url="/stop_planner", method="POST")
-)
-
+PrimaryButtonConfig(name="关闭避障", target=ToastConfig(url="/stop_planner", method="POST"))
 PrimaryButtonConfig(
     name="开启检测",
     target=FormConfig(
@@ -114,10 +100,7 @@ PrimaryButtonConfig(
         ),
     ),
 )
-PrimaryButtonConfig(
-    name="关闭检测", target=ToastConfig(url="/stop_detect", method="POST")
-)
-
+PrimaryButtonConfig(name="关闭检测", target=ToastConfig(url="/stop_detect", method="POST"))
 PrimaryButtonConfig(
     name="开始录制",
     target=FormConfig(
@@ -128,10 +111,7 @@ PrimaryButtonConfig(
         ),
     ),
 )
-PrimaryButtonConfig(
-    name="结束录制", target=ToastConfig(url="/stop_record", method="POST")
-)
-
+PrimaryButtonConfig(name="结束录制", target=ToastConfig(url="/stop_record", method="POST"))
 PrimaryButtonConfig(
     name="云台控制",
     target=FormConfig(
@@ -147,7 +127,6 @@ PrimaryButtonConfig(
         ),
     ),
 )
-
 PrimaryButtonConfig(
     name="曝光控制",
     target=FormConfig(
@@ -163,7 +142,6 @@ PrimaryButtonConfig(
         ),
     ),
 )
-
 PrimaryButtonConfig(
     name="参数设置",
     target=FormConfig(
@@ -184,7 +162,6 @@ PrimaryButtonConfig(
         ),
     ),
 )
-
 TableConfig(
     config_id="mission_data",
     columns=dict(
@@ -194,4 +171,5 @@ TableConfig(
         alt=TableColumnConfig(title="高度"),
         command=TableColumnConfig(title="类型"),
     ),
+    curIndexKey="wp_idx",
 )

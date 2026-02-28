@@ -3,7 +3,7 @@ project(mavproxy_ros)
 
 ## Compile as C++17 (required by event_callback headers: std::any, if constexpr)
 add_compile_options(-std=c++17)
-
+catkin_python_setup()
 ###################################
 ## Find catkin macros and libraries
 ###################################

@@ -1,5 +1,6 @@
-import time
 import threading
+import time
+
 import rospy
 
 
@@ -8,6 +9,7 @@ class EventType:
 
 
 class CtrlNode:
+
     def __init_subclass__(cls):
         event_handler = {}
         for name, func in cls.__dict__.items():
@@ -36,6 +38,7 @@ class CtrlNode:
 
     @staticmethod
     def on(event_type):
+
         def warpper(func):
             func.event = event_type
             return func
@@ -47,12 +50,14 @@ class CtrlNode:
 
 
 class Event:
+
     def __init__(self, event_type, **kwargs):
         self.type = event_type
         self.data = kwargs
 
 
 class Runner:
+
     def __init__(self, node_list=None, step_cb=None, context=None, idle_hz=10):
         self.node = None
         self.step_cb = step_cb
@@ -60,11 +65,9 @@ class Runner:
         self.idle_hz = idle_hz
         self.context = context
         self.lock = threading.Lock()
-
         if node_list is not None:
             self.add_node_list(node_list)
             self.node = node_list[0]
-
         threading.Thread(target=self.idle, daemon=True).start()
 
     def idle(self):
@@ -99,6 +102,7 @@ class Runner:
     def trigger(self, event_type, **kwargs):
         if self.node is None:
             return
+
         with self.lock:
             handlers = self.node.event_handler.get(event_type, [])
             for h in handlers:

@@ -1,13 +1,22 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 import rospy
-from mavros_msgs.srv import CommandBool, CommandBoolResponse
-from mavros_msgs.srv import SetMode, SetModeResponse
-from mavros_msgs.srv import CommandTOL, CommandTOLResponse
-from mavros_msgs.srv import StreamRate, StreamRateResponse
-from mavros_msgs.srv import ParamSet, ParamSetResponse
-from mavros_msgs.srv import ParamGet, ParamGetResponse
-from mavros_msgs.srv import ParamPull, ParamPullResponse
+from mavros_msgs.srv import (
+    CommandBool,
+    CommandBoolResponse,
+    CommandTOL,
+    CommandTOLResponse,
+    ParamGet,
+    ParamGetResponse,
+    ParamPull,
+    ParamPullResponse,
+    ParamSet,
+    ParamSetResponse,
+    SetMode,
+    SetModeResponse,
+    StreamRate,
+    StreamRateResponse,
+)
 
 
 def arming_callback(req):
@@ -47,7 +56,6 @@ def parampull_callback(req):
 
 if __name__ == "__main__":
     rospy.init_node("dummy_mavros_services")
-
     srv1 = rospy.Service("/mavros/cmd/arming", CommandBool, arming_callback)
     srv2 = rospy.Service("/mavros/set_mode", SetMode, set_mode_callback)
     srv3 = rospy.Service("/mavros/cmd/takeoff", CommandTOL, takeoff_callback)

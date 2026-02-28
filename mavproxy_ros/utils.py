@@ -1,5 +1,6 @@
 import time
 from typing import Dict, Optional
+
 import requests
 
 
@@ -12,7 +13,8 @@ def ERROR_RESPONSE(msg):
 
 
 class FPSHelper:
-    def __init__(self, fps=-1, ps_cb=None):
+
+    def __init__(self, fps= -1, ps_cb=None):
         self.target_fps = fps
         self.start = time.time()
         self.cnt_start = time.time()
@@ -28,20 +30,19 @@ class FPSHelper:
             self.cnt_start = time.time()
             if self.ps_cb is not None:
                 self.ps_cb(self.fps)
-
         self.frame_cnt += 1
         if block:
             if self.target_fps > 0 and now - self.start < 1 / self.target_fps:
                 time.sleep(1 / self.target_fps - now + self.start)
             self.start = time.time()
-            # self.frame_cnt += 1
+        # self.frame_cnt += 1
         else:
             if self.target_fps > 0 and now - self.start < 1 / self.target_fps:
                 trigger = False
             else:
                 trigger = True
                 self.start = time.time()
-                # self.frame_cnt += 1
+            # self.frame_cnt += 1
             return trigger
 
 
@@ -57,6 +58,7 @@ def post_json(
         if verbose:
             print(f"post res: {res.json()}")
         return res
+
     except Exception as e:
         print(f"post res: {e}")
     return None

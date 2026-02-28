@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-import rospy
-import tf
+from math import cos, sin
+
 import geometry_msgs.msg
 import nav_msgs.msg
-from math import sin, cos
+import rospy
+import tf
 from quadrotor_msgs.msg import PositionCommand
 
 
 def msg_to_odom(msg):
     odom = nav_msgs.msg.Odometry()
-
     # 设置header
     odom.header.stamp = rospy.Time.now()
     odom.header.frame_id = "map"
     odom.child_frame_id = "base_link"
-
     # 设置位置
     odom.pose.pose.position.x = msg.position.x
     odom.pose.pose.position.y = msg.position.y
     odom.pose.pose.position.z = msg.position.z
-
     # 设置方向（从yaw到四元数）
     from tf.transformations import quaternion_from_euler
 
@@ -28,12 +26,10 @@ def msg_to_odom(msg):
     odom.pose.pose.orientation.y = q[1]
     odom.pose.pose.orientation.z = q[2]
     odom.pose.pose.orientation.w = q[3]
-
     # 设置速度
     odom.twist.twist.linear.x = msg.velocity.x
     odom.twist.twist.linear.y = msg.velocity.y
     odom.twist.twist.linear.z = msg.velocity.z
-
     return odom
 
 

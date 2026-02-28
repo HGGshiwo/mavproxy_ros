@@ -10,7 +10,13 @@ class PIDController:
     """
 
     def __init__(
-        self, kp, ki, kd, setpoint=0, output_min=-float("inf"), output_max=float("inf")
+        self,
+        kp,
+        ki,
+        kd,
+        setpoint=0,
+        output_min= - float("inf"),
+        output_max= float("inf"),
     ):
         # PID 核心参数
         self.kp = kp
@@ -21,7 +27,6 @@ class PIDController:
         # 输出限制（抗积分饱和）
         self.output_min = output_min
         self.output_max = output_max
-
         # 内部状态变量
         self.last_error = 0  # 上一次的误差
         self.integral = 0  # 积分累积值
@@ -38,19 +43,16 @@ class PIDController:
         """
         # 1. 计算当前误差（目标值 - 实际值）
         error = current_value - self.setpoint
-
         # 2. 计算时间差（dt），首次调用时 dt 设为 0，避免除以 0
         if self.last_time is None:
             dt = 0
         else:
             dt = current_time - self.last_time
-
         # 3. 比例项（P）：直接与误差成正比
         kp = self.kp
         if kp_rate is not None:
             kp = kp * kp_rate
         proportional = kp * error
-
         # 4. 积分项（I）：累积误差 × 时间，同时限制积分范围（抗积分饱和）
         integral = self.integral + error * dt
         integral = max(
@@ -59,18 +61,14 @@ class PIDController:
         )
         self.integral = integral
         integral_term = self.ki * integral
-
         # 5. 微分项（D）：误差变化率 × 微分系数（避免 dt=0 时出错）
         derivative = (error - self.last_error) / dt if dt > 0 else 0
         derivative_term = self.kd * derivative
-
         # 6. 计算总输出，并限制输出范围
         output = proportional + integral_term + derivative_term
         # print(current_value, proportional, integral_term, derivative_term)
         output = max(min(output, self.output_max), self.output_min)
-
         # 7. 更新状态变量，为下一次计算做准备
         self.last_error = error
         self.last_time = current_time
-
         return output

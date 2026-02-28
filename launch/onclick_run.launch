@@ -1,6 +1,8 @@
 <launch>
     <arg name="debug" default="false" />
     <arg name="planner_enable" default="true"/>
+    <!-- <arg name="controller_name" default="drone" /> -->
+    <arg name="controller_name" default="dog" />
     <arg name="param_file" default="$(find mavproxy_ros)/config/param.yml" />
     
     <group ns="mavproxy">
@@ -8,6 +10,7 @@
         <node pkg="mavproxy_ros" type="control.py" name="control" output="screen" respawn="True">
             <rosparam command="load" file="$(find mavproxy_ros)/config/control.yml"/>
             <param name="planner_enable" value="$(arg planner_enable)" />
+            <param name="controller_name" value="$(arg controller_name)" />
         </node>
         <node pkg="mavproxy_ros" type="pland.py" name="pland" output="screen" clear_params="true">
             <rosparam command="load" file="$(find mavproxy_ros)/config/pland.yml"/>

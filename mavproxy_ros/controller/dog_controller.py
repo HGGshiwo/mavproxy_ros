@@ -1,28 +1,26 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-
-from base.controller.base_controller import BaseController
 import math
 import struct
 import threading
 import time
+from logging import getLogger
 from typing import Optional
 
+import rospy
+from event_callback import CallbackManager, http
 from event_callback.components.http.core import HTTPConfig
 from event_callback.components.http.message_handler import MessageType
-from event_callback.utils import setup_logger
-from dog_utils import *
 from event_callback.components.socket import (
-    SocketClientConfig,
-    SocketServerConfig,
-    socketc,
-    sockets,
+    SocketClientConfig, SocketServerConfig, socketc, sockets
 )
-from event_callback import http
-from event_callback import CallbackManager
-from logging import getLogger
-import rospy
+from event_callback.utils import setup_logger
 from nav_msgs.msg import Odometry
+
+from mavproxy_ros.utils import post_json
+
+from .base_controller import BaseController
+from .dog_utils import *
 
 logger = getLogger(__file__)
 setup_logger()
@@ -33,6 +31,7 @@ def router(data: bytes):
     try:
         command_id = struct.unpack("<I", data[0:4])[0]
         return CommandType(command_id)
+
     except Exception as e:
         print(f"指令解析失败！data: 0x{data.hex()}, error: {e}")
         return None
@@ -47,7 +46,8 @@ server_host = "localhost"
 server_port = 43893
 
 
-class DrogController(CallbackManager, BaseController):
+class DogController(CallbackManager, BaseController):
+
     def __init__(self):
         # 组件配置
         config = [
@@ -69,7 +69,6 @@ class DrogController(CallbackManager, BaseController):
             ),
             HTTPConfig(port=8001),
         ]
-
         self.max_backward_vel = None
         self.max_forward_vel = None
         self.v_max_lock = threading.Lock()
@@ -77,29 +76,29 @@ class DrogController(CallbackManager, BaseController):
         self.is_run = None  # 是否是跑步步态
         self.paltform_height = None  # 0 匍匐, 2 站立, 无法从上报状态读出
         super().__init__(config)
-
         # 订阅 ENU odom，用于位置控制
         self._odom: Optional[Odometry] = None
         self._odom_lock = threading.Lock()
         rospy.Subscriber(
-            "/mavros/local_position/odom",
-            Odometry,
-            self._odom_callback,
-            queue_size=1,
+            "/mavros/local_position/odom", Odometry, self._odom_callback, queue_size=1
         )
-
         # 位置控制后台线程管理
         self._pos_ctrl_thread: Optional[threading.Thread] = None
         self._pos_ctrl_stop = threading.Event()
         self._pos_ctrl_lock = threading.Lock()
-
         heartbeat_t = threading.Thread(
-            target=self.heartbeat_thread,
-            daemon=True,
-            name="heartbeat-thread",
+            target=self.heartbeat_thread, daemon=True, name="heartbeat-thread"
         )
         heartbeat_t.start()
         logger.info("心跳线程已启动（2Hz）")
+
+    def is_pland_enable(self):
+        """该模式下是否允许精准降落"""
+        return False
+
+    def _post_init(self):
+        # 对于狗，禁止自动上锁
+        post_json("/set_param", data=dict(param=dict(DISARM_DELAY=dict(value=0))))
 
     def do_takeoff(self, alt: float):
         """起立"""
@@ -119,6 +118,7 @@ class DrogController(CallbackManager, BaseController):
         with self._odom_lock:
             if self._odom is None:
                 return None
+
             pos = self._odom.pose.pose.position
             return [pos.x, pos.y, pos.z]
 
@@ -127,6 +127,7 @@ class DrogController(CallbackManager, BaseController):
         with self._odom_lock:
             if self._odom is None:
                 return 0.0
+
             q = self._odom.pose.pose.orientation
             # 四元数转 yaw
             siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
@@ -157,33 +158,33 @@ class DrogController(CallbackManager, BaseController):
         """
         发送运动指令。
 
-        - 速度控制（v 不为 None，p 为 None）：发送一次轴指令即返回。
+        - 速度控制（v 不为 None）：发送一次轴指令即返回。
         - 位置控制（p 不为 None）：在后台线程中持续发送，直到到达目标位置。
-
+        - 速度位置控制: v, p都不为None：等效于速度控制
+        
         frame:
           "enu"  — ENU坐标系下: x为E, y为N, z为U
           "body" — 机体坐标系下: x为前, y为左, z为下
         """
         resolved_frame: str = frame if frame is not None else "enu"
-        if p is not None:
-            # ---- 位置控制 ----
-            self._start_position_control(p, yaw, resolved_frame)
-        elif v is not None:
+        if v is not None:  # 优先进行速度控制
             # ---- 速度控制 ----
             self._stop_position_control()
             self._send_velocity_cmd(v, yaw_rate, resolved_frame)
+        elif p is not None:
+            # ---- 位置控制 ----
+            self._start_position_control(p, yaw, resolved_frame)
         else:
             # 无有效指令，发送零速停止
             self._stop_position_control()
             self.move_axis_no_dead_zone(0, 0, 0, 0)
 
-    # ---- 速度控制 ----
 
+    # ---- 速度控制 ----
     def _send_velocity_cmd(self, v: list, yaw_rate: Optional[float], frame: str):
         """将速度指令转换为轴指令并发送一次"""
         vx, vy = float(v[0]), float(v[1]) if len(v) > 1 else 0.0
         yr = float(yaw_rate) if yaw_rate is not None else 0.0
-
         if frame == "enu":
             # ENU → 机体坐标系：需要根据当前 yaw 旋转
             cur_yaw = self._get_current_yaw_enu()
@@ -195,18 +196,16 @@ class DrogController(CallbackManager, BaseController):
 
         with self.v_max_lock:
             max_vel = self.max_forward_vel if self.max_forward_vel else 1.0
-
         left_x, left_y, right_x = self._vel_to_axis(vx_body, vy_body, yr, max_vel)
         self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
 
-    # ---- 位置控制 ----
 
+    # ---- 位置控制 ----
     def _start_position_control(
         self, target_p: list, target_yaw: Optional[float], frame: str
     ):
         """停止旧的位置控制线程，启动新的位置控制线程"""
         self._stop_position_control()
-
         with self._pos_ctrl_lock:
             self._pos_ctrl_stop.clear()
             self._pos_ctrl_thread = threading.Thread(
@@ -237,15 +236,11 @@ class DrogController(CallbackManager, BaseController):
         MAX_VEL = 0.5  # 最大控制速度 (m/s)
         RATE = 20  # 控制频率 (Hz)
         dt = 1.0 / RATE
-
         tx = float(target_p[0])
         ty = float(target_p[1]) if len(target_p) > 1 else 0.0
-
         # 目标 yaw（仅在 ENU 模式下支持）
         target_yaw_val = float(target_yaw) if target_yaw is not None else None
-
         logger.info(f"位置控制启动: target=({tx:.2f}, {ty:.2f}), frame={frame}")
-
         while not self._pos_ctrl_stop.is_set():
             cur_pos = self._get_current_pos_enu()
             if cur_pos is None:
@@ -266,7 +261,7 @@ class DrogController(CallbackManager, BaseController):
             else:
                 raise ValueError(f"不支持的坐标系: {frame}")
 
-            dist = math.sqrt(ex**2 + ey**2)
+            dist = math.sqrt(ex ** 2 + ey ** 2)
             if dist < POS_THRESHOLD:
                 logger.info(f"已到达目标位置，误差={dist:.3f}m")
                 # 发送零速停止
@@ -277,11 +272,9 @@ class DrogController(CallbackManager, BaseController):
             scale = min(KP, MAX_VEL / max(dist, 1e-6))
             vx_enu = ex * scale
             vy_enu = ey * scale
-
             # 转换到机体系
             cur_yaw = self._get_current_yaw_enu()
             vx_body, vy_body = self._enu_vel_to_body(vx_enu, vy_enu, cur_yaw)
-
             # yaw 控制（如有目标 yaw）
             yr = 0.0
             if target_yaw_val is not None:
@@ -289,15 +282,11 @@ class DrogController(CallbackManager, BaseController):
                 # 归一化到 [-pi, pi]
                 yaw_err = (yaw_err + math.pi) % (2 * math.pi) - math.pi
                 yr = max(-1.0, min(1.0, yaw_err * KP))
-
             with self.v_max_lock:
                 max_vel = self.max_forward_vel if self.max_forward_vel else MAX_VEL
-
             left_x, left_y, right_x = self._vel_to_axis(vx_body, vy_body, yr, max_vel)
             self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
-
             time.sleep(dt)
-
         logger.info("位置控制线程退出")
 
     @staticmethod
@@ -327,21 +316,15 @@ class DrogController(CallbackManager, BaseController):
         if x is not None:
             data = pack_q25_udp_cmd(CommandType.MOVE_X_AXIS, parameter_size=x)
             socketc.send_to_server(self, data)
-
         if y is not None:
             data = pack_q25_udp_cmd(CommandType.MOVE_Y_AXIS, parameter_size=y)
             socketc.send_to_server(self, data)
-
         if yaw is not None:
             data = pack_q25_udp_cmd(CommandType.MOVE_YAW_AXIS, parameter_size=yaw)
             socketc.send_to_server(self, data)
 
     def move_axis_no_dead_zone(
-        self,
-        left_x: int = 0,
-        left_y: int = 0,
-        right_x: int = 0,
-        right_y: int = 0,
+        self, left_x: int = 0, left_y: int = 0, right_x: int = 0, right_y: int = 0
     ):
         """【新无死区】三轴运动控制（推荐使用），机体坐标系FLU，
         注意这个API的xy是相反的，和文档不一样
@@ -360,7 +343,6 @@ class DrogController(CallbackManager, BaseController):
         axis_data = AxisCommand(
             left_x=left_x, left_y=left_y, right_x=right_x, right_y=right_y
         )
-
         # 打包并发送指令（50Hz频率由调用方保证或新增线程控制）
         data = pack_q25_udp_cmd(
             command_type=CommandType.AXIS_COMMAND_NO_DEAD_ZONE,
@@ -369,13 +351,25 @@ class DrogController(CallbackManager, BaseController):
         )
         socketc.send_to_server(self, data)
 
+
     # ===================== 接收类指令（SOCKET监听）=====================
+    @sockets.recv(CommandType.BATTERY_LEVEL_REPORT, frequency=1)
+    def battery_level_report(self, data: bytes):
+        """接收电池电量数据（0.5Hz）"""
+        _, data_obj = unpack_q25_udp_cmd(data)
+        if not isinstance(data_obj, BatteryLevel):
+            return
+
+        json_data = {"battery_level": data_obj.level}
+        http.ws_send(self, json_data, MessageType.STATE)
+
     @sockets.recv(CommandType.MOTION_STATE_REPORT, frequency=1)
     def motion_state_report(self, data: bytes):
         """接收运动状态数据（200Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, MotionStateData):
             return
+
         with self.v_max_lock:
             self.max_forward_vel = data_obj.max_forward_vel
             self.max_backward_vel = data_obj.max_backward_vel
@@ -385,7 +379,6 @@ class DrogController(CallbackManager, BaseController):
             gait_desc = "行走"
         elif data_obj.gait_state == 0x23:
             gait_desc = "跑步"
-
         _json_data = {
             "basic_state": data_obj.basic_state,
             "gait_state": data_obj.gait_state,
@@ -406,7 +399,6 @@ class DrogController(CallbackManager, BaseController):
             "run_distance": round(data_obj.robot_distance, 1),
             "charge_state": data_obj.auto_charge_state,
         }
-
         # 补充basic_state=0x10（L模式）映射
         state_map = {
             0: "趴下状态",
@@ -440,115 +432,115 @@ class DrogController(CallbackManager, BaseController):
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, RcsData):
             return
-        json_data = {
-            "robot_name": data_obj.robot_name,
-            "current_milege": data_obj.current_milege,
-            "total_milege": data_obj.total_milege,
-            "current_run_time": data_obj.current_run_time,
-            "total_run_time": data_obj.total_run_time,
-            "motion_mode": "导航" if data_obj.is_nav_mode == 1 else "手动",
-            "joystick": {
-                "lx": round(data_obj.joystick_lx, 3),
-                "ly": round(data_obj.joystick_ly, 3),
-                "rx": round(data_obj.joystick_rx, 3),
-                "ry": round(data_obj.joystick_ry, 3),
-            },
-            "errors": {
-                "imu_error": data_obj.imu_error,
-                "wifi_error": data_obj.wifi_error,
-                "driver_heat_warn": data_obj.driver_heat_warn,
-                "driver_error": data_obj.driver_error,
-                "motor_heat_warn": data_obj.motor_heat_warn,
-                "battery_low_warn": data_obj.battery_low_warn,
-            },
+
+        # json_data = {
+        #     "robot_name": data_obj.robot_name,
+        #     "current_milege": data_obj.current_milege,
+        #     "total_milege": data_obj.total_milege,
+        #     "current_run_time": data_obj.current_run_time,
+        #     "total_run_time": data_obj.total_run_time,
+        #     "motion_mode": "导航" if data_obj.is_nav_mode == 1 else "手动",
+        #     "joystick": {
+        #         "lx": round(data_obj.joystick_lx, 3),
+        #         "ly": round(data_obj.joystick_ly, 3),
+        #         "rx": round(data_obj.joystick_rx, 3),
+        #         "ry": round(data_obj.joystick_ry, 3),
+        #     },
+        #     "errors": {
+        #         "imu_error": data_obj.imu_error,
+        #         "wifi_error": data_obj.wifi_error,
+        #         "driver_heat_warn": data_obj.driver_heat_warn,
+        #         "driver_error": data_obj.driver_error,
+        #         "motor_heat_warn": data_obj.motor_heat_warn,
+        #         "battery_low_warn": data_obj.battery_low_warn,
+        #     },
+        # }
+        error = {
+            "imu_error": data_obj.imu_error,
+            "wifi_error": data_obj.wifi_error,
+            "driver_heat_warn": data_obj.driver_heat_warn,
+            "driver_error": data_obj.driver_error,
+            "motor_heat_warn": data_obj.motor_heat_warn,
+            "battery_low_warn": data_obj.battery_low_warn,
         }
-        http.ws_send(self, json_data, MessageType.STATE)
+        error = ", ".join([k for k, v in error.items() if v is True])
+        http.ws_send(self, dict(error=error), MessageType.ERROR)
 
-    @sockets.recv(CommandType.SENSOR_DATA_REPORT, frequency=10)
-    def sensor_data_report(self, data: bytes):
-        """接收运动控制传感器数据（200Hz）"""
-        _, data_obj = unpack_q25_udp_cmd(data)
-        if not isinstance(data_obj, ControllerSensorData):
-            return
-        imu = data_obj.imu_data
-        json_data = {
-            "imu": {
-                "timestamp": imu.timestamp,
-                "angle": [round(imu.roll, 2), round(imu.pitch, 2), round(imu.yaw, 2)],
-                "angular_vel": [
-                    round(imu.omega_x, 3),
-                    round(imu.omega_y, 3),
-                    round(imu.omega_z, 3),
-                ],
-                "acceleration": [
-                    round(imu.acc_x, 3),
-                    round(imu.acc_y, 3),
-                    round(imu.acc_z, 3),
-                ],
-            },
-            "joint_pos": self._format_joint_data(data_obj.joint_pos),
-            "joint_vel": self._format_joint_data(data_obj.joint_vel),
-            "joint_torque": self._format_joint_data(data_obj.joint_tau),
-        }
-        # http.ws_send(self, json_data, MessageType.STATE)
 
-    @sockets.recv(CommandType.CONTROLLER_SAFE_DATA_REPORT, frequency=1)
-    def controller_safe_report(self, data: bytes):
-        """接收运动控制系统数据（1Hz）"""
-        _, data_obj = unpack_q25_udp_cmd(data)
-        if not isinstance(data_obj, ControllerSafeData):
-            return
-        json_data = {
-            "motor_temperatures": [
-                round(temp, 1) for temp in data_obj.motor_temperatures
-            ],
-            "driver_temperatures": data_obj.driver_temperatures,
-            "cpu": {
-                "temperature": round(data_obj.cpu_info.temperature, 1),
-                "frequency": round(data_obj.cpu_info.frequency, 0),
-            },
-        }
-        http.ws_send(self, json_data, MessageType.STATE)
-
-    @sockets.recv(CommandType.BATTERY_LEVEL_REPORT, frequency=10)
-    def battery_level_report(self, data: bytes):
-        """接收电池电量数据（0.5Hz）"""
-        _, data_obj = unpack_q25_udp_cmd(data)
-        if not isinstance(data_obj, BatteryLevel):
-            return
-        json_data = {"type": "battery_level", "level": data_obj.level}
-        http.ws_send(self, json_data, MessageType.STATE)
-
-    @sockets.recv(CommandType.BATTERY_CHARGE_STATE_REPORT, frequency=10)
-    def battery_charge_report(self, data: bytes):
-        """接收电池充电状态数据（0.5Hz）"""
-        _, data_obj = unpack_q25_udp_cmd(data)
-        if not isinstance(data_obj, BatteryChargeState):
-            return
-        json_data = {
-            "level": data_obj.level,
-            "is_charging": data_obj.is_charging,
-            "charge_desc": "充电中" if data_obj.is_charging else "未充电",
-        }
-        http.ws_send(self, json_data, MessageType.STATE)
-
+    # @sockets.recv(CommandType.SENSOR_DATA_REPORT, frequency=10)
+    # def sensor_data_report(self, data: bytes):
+    #     """接收运动控制传感器数据（200Hz）"""
+    #     _, data_obj = unpack_q25_udp_cmd(data)
+    #     if not isinstance(data_obj, ControllerSensorData):
+    #         return
+    #     imu = data_obj.imu_data
+    #     json_data = {
+    #         "imu": {
+    #             "timestamp": imu.timestamp,
+    #             "angle": [round(imu.roll, 2), round(imu.pitch, 2), round(imu.yaw, 2)],
+    #             "angular_vel": [
+    #                 round(imu.omega_x, 3), round(imu.omega_y, 3), round(imu.omega_z, 3)
+    #             ],
+    #             "acceleration": [
+    #                 round(imu.acc_x, 3), round(imu.acc_y, 3), round(imu.acc_z, 3)
+    #             ],
+    #         },
+    #         "joint_pos": self._format_joint_data(data_obj.joint_pos),
+    #         "joint_vel": self._format_joint_data(data_obj.joint_vel),
+    #         "joint_torque": self._format_joint_data(data_obj.joint_tau),
+    #     }
+    # http.ws_send(self, json_data, MessageType.STATE)
+    # @sockets.recv(CommandType.CONTROLLER_SAFE_DATA_REPORT, frequency=1)
+    # def controller_safe_report(self, data: bytes):
+    #     """接收运动控制系统数据（1Hz）"""
+    #     _, data_obj = unpack_q25_udp_cmd(data)
+    #     if not isinstance(data_obj, ControllerSafeData):
+    #         return
+    #     json_data = {
+    #         "motor_temperatures": [
+    #             round(temp, 1) for temp in data_obj.motor_temperatures
+    #         ],
+    #         "driver_temperatures": data_obj.driver_temperatures,
+    #         "cpu": {
+    #             "temperature": round(data_obj.cpu_info.temperature, 1),
+    #             "frequency": round(data_obj.cpu_info.frequency, 0),
+    #         },
+    #     }
+    #     http.ws_send(self, json_data, MessageType.STATE)
+    # @sockets.recv(CommandType.BATTERY_CHARGE_STATE_REPORT, frequency=10)
+    # def battery_charge_report(self, data: bytes):
+    #     """接收电池充电状态数据（0.5Hz）"""
+    #     _, data_obj = unpack_q25_udp_cmd(data)
+    #     if not isinstance(data_obj, BatteryChargeState):
+    #         return
+    #     json_data = {
+    #         "level": data_obj.level,
+    #         "is_charging": data_obj.is_charging,
+    #         "charge_desc": "充电中" if data_obj.is_charging else "未充电",
+    #     }
+    #     http.ws_send(self, json_data, MessageType.STATE)
     @sockets.recv(CommandType.ERROR_CODE_REPORT, frequency=10)
     def error_code_report(self, data: bytes):
         """接收错误码数据"""
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, ErrorCode):
             return
-        level_desc = {0: "通知", 1: "警告", 2: "错误"}
-        json_data = {
-            "error_level": data_obj.error_level,
-            "level_desc": level_desc.get(data_obj.error_level, "未知"),
-            "error_code": hex(data_obj.error_code),
-            "error_msg": data_obj.error_msg,
+
+        level_desc = {0: MessageType.INFO, 1: MessageType.WARN, 2: MessageType.ERROR}
+        # json_data = {
+        #     "error_level": data_obj.error_level,
+        #     "level_desc": level_desc.get(data_obj.error_level, "未知"),
+        #     "error_code": hex(data_obj.error_code),
+        #     "error_msg": data_obj.error_msg,
+        # }
+        level = level_desc.get(data_obj.error_level, MessageType.INFO)
+        error = {
+            level.name.lower(): f"0x{hex(data_obj.error_code)}: {data_obj.error_msg}"
         }
-        http.ws_send(self, json_data, MessageType.STATE)
+        http.ws_send(self, error, level)
+
 
     # ===================== 辅助工具方法 =====================
-
     @staticmethod
     def _format_joint_data(joint_data: LegJointData) -> dict:
         """格式化关节数据（位置/速度/力矩）"""
@@ -574,6 +566,7 @@ class DrogController(CallbackManager, BaseController):
                 "knee": round(joint_data.hr_knee, 3),
             },
         }
+
 
     # ===================== 心跳发送线程（2Hz）=====================
     def heartbeat_thread(self):
