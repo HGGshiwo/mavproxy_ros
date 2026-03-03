@@ -200,6 +200,7 @@ class InitNode(CtrlNode):
       - 是 → HOVER
       - 否 → GROUND
     """
+
     ground_enable = False
     land_enable = False
 
@@ -226,6 +227,7 @@ class GroundNode(CtrlNode):
     - 收到 SET_WP     → 以航点第一个点高度为起飞高度 → TAKING_OFF2
     - 检测到已在空中（check_hover）→ HOVER（掉电重启场景）
     """
+
     takeoff_enable = True
 
     def __init__(self):
@@ -254,6 +256,7 @@ class TakeoffNode(CtrlNode):
     退出条件：
     - check_alt(takeoff_alt, TAKEOFF_THRESHOLD) 成立 → 发布起飞完成事件 → HOVER
     """
+
     land_enable = True
     wp_enable = True
     takeoff_enable = True
@@ -279,6 +282,7 @@ class Takeoff2Node(CtrlNode):
     退出条件：
     - check_alt(takeoff_alt, TAKEOFF_THRESHOLD) 成立 → 发布起飞完成事件 → LIFTING
     """
+
     wp_enable = True
     land_enable = True
     takeoff_enable = True
@@ -307,6 +311,7 @@ class HoverNode(CtrlNode):
     - SET_LAND    → LANDING
     - DETECT      → FOLLOW
     """
+
     detect_enable = True
     land_enable = True
     wp_enable = True
@@ -332,6 +337,7 @@ class LiftingNode(CtrlNode):
     - 卡死超时：每 LIFTING_TIMEOUT 秒检查一次，若高度和偏航变化量均 < LIFTING_STALL_THRESHOLD
                则判定为卡死，强制进入 WP
     """
+
     wp_enable = True
     land_enable = True
     detect_enable = True
@@ -386,8 +392,8 @@ class LiftingNode(CtrlNode):
 
         if time.time() - self.start_time > LIFTING_TIMEOUT:  # 卡死超时，强制进入 WP
             if (
-                math.fabs(self.last_alt - context.rel_alt) < LIFTING_STALL_THRESHOLD and
-                math.fabs(self.last_yaw - context.yaw) < LIFTING_STALL_THRESHOLD
+                math.fabs(self.last_alt - context.rel_alt) < LIFTING_STALL_THRESHOLD
+                and math.fabs(self.last_yaw - context.yaw) < LIFTING_STALL_THRESHOLD
             ):
                 context.do_send_cmd(v=[0, 0, 0])
                 self.step(NodeType.WP)
@@ -407,6 +413,7 @@ class WpNode(CtrlNode):
       - 全部完成且 land=True → LANDING
       - 全部完成且 land=False → HOVER
     """
+
     detect_enable = True
     land_enable = True
     wp_enable = True
@@ -492,6 +499,7 @@ class LandNode(CtrlNode):
     - 目标数据超时（> PLAND_TARGET_TIMEOUT）则停止控制输出，等待新数据。
     - 遥控器有输入时优先响应遥控器速度，覆盖视觉控制。
     """
+
     takeoff_enable = True
     wp_enable = True
     land_enable = True
@@ -550,13 +558,13 @@ class LandNode(CtrlNode):
                 logger.warning("no rangefinder data found, ignore")
                 return
 
-            vz = np.clip(- context.rangefinder_alt, -1, 1)
+            vz = np.clip(-context.rangefinder_alt, -1, 1)
         stamp = rospy.Time.now().to_sec()
         rel_alt = np.clip(context.rangefinder_alt, 0.1, 10)
         # 控制像素中心点靠近目标点
-        vx = - self.pid_x_controller(y * rel_alt, stamp)
-        vy = - self.pid_y_controller(x * rel_alt, stamp)
-        yaw_rate = - self.pid_yaw_controller(yaw, stamp)
+        vx = -self.pid_x_controller(y * rel_alt, stamp)
+        vy = -self.pid_y_controller(x * rel_alt, stamp)
+        yaw_rate = -self.pid_yaw_controller(yaw, stamp)
         return vx, vy, vz, yaw_rate
 
     @CtrlNode.on(CEventType.IDLE)
@@ -592,6 +600,7 @@ class FollowNode(CtrlNode):
     - 收到 STOP_FOLLOW → 关闭检测节点，回到进入跟随前的状态
       （若进入前为 WP，则退回 LIFTING；其他状态原路返回）
     """
+
     detect_enable = True
 
     def __init__(self):
@@ -607,8 +616,9 @@ class FollowNode(CtrlNode):
             "/UAV0/perception/object_location/object_location_node/enable_send", False
         )
         node_before_detect = (
-            NodeType.LIFTING if context.node_before_detect ==
-            NodeType.WP else context.node_before_detect
+            NodeType.LIFTING
+            if context.node_before_detect == NodeType.WP
+            else context.node_before_detect
         )
         self.step(node_before_detect)
 
@@ -617,7 +627,7 @@ class PosVelMoveNode(CtrlNode):
     """定点移动状态：持续调用do_send_cmd移动，到达目标点或超时则退回之前的状态。
 
     行为差异取决于 context.posvel_fix_yaw：
-      - fix_yaw=True : 运动过程中始终锁定进入时记录的初始机头朝向（posvel_init_yaw），
+      - fix_yaw=True : 运动过程中始终锁定给定的yaw
                        到达目标点后进入 POSVEL_YAW 调整终点yaw（若有）。
       - fix_yaw=False: 运动过程中将机头始终朝向目标直线方向（实时更新yaw），
                        到达目标点后进入 POSVEL_YAW 调整终点yaw（若有）。
@@ -625,6 +635,7 @@ class PosVelMoveNode(CtrlNode):
     到达判定：在 IDLE 中用 odom 当前位置与目标 ENU 坐标计算三维距离，与 WpNode 逻辑一致。
     超时判定：超过 context.posvel_timeout 秒没有收到 SET_POSVEL 调用，退回前一状态。
     """
+
     land_enable = True
 
     def __init__(self):
@@ -668,7 +679,7 @@ class PosVelMoveNode(CtrlNode):
         vz = np.clip(diff_z, -1, 1)
         if context.posvel_fix_yaw:
             # fix_yaw=True：始终锁定进入时记录的初始机头朝向
-            context.do_send_cmd(v=[vx, vy, vz], yaw=context.posvel_init_yaw)
+            context.do_send_cmd(v=[vx, vy, vz], yaw=context.posvel_target_yaw)
         else:
             # fix_yaw=False：实时将机头朝向目标直线方向（ENU弧度）
             heading_yaw = context.enu_xy2yaw(diff_x, diff_y)
@@ -714,6 +725,7 @@ class PosVelYawNode(CtrlNode):
       - fix_yaw=False: 到达终点后调整到 posvel_target_yaw（若有）。
     若 posvel_target_yaw 为 None，则直接退回前一状态，不做任何调整。
     """
+
     land_enable = True
 
     def __init__(self):
@@ -744,7 +756,6 @@ class PosVelYawNode(CtrlNode):
 
 
 class Control(CallbackManager, ROSProxy):
-
     def __init__(self, component_config=None, mixins=None):
         super().__init__(component_config, mixins)
         self.send_time = 0
@@ -785,7 +796,6 @@ class Control(CallbackManager, ROSProxy):
         self.posvel_target_vel = 0  # 目标速度
         self.posvel_target_yaw = None  # 目标偏航角（ENU弧度），到达终点后调整到此yaw；None表示不调整
         self.posvel_fix_yaw = True  # 是否固定机头方向（True=锁定初始yaw，False=跟随运动方向）
-        self.posvel_init_yaw = None  # fix_yaw=True时进入POSVEL_MOVE时记录的初始机头朝向
         self.posvel_timeout = 2.0  # 超时时长（秒），由接口传入
         self.posvel_node_before = NodeType.HOVER  # 进入posvel模式前的状态
         self.runner = Runner(
@@ -825,8 +835,8 @@ class Control(CallbackManager, ROSProxy):
         self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
         self.pland_enable = rosparam_field("pland_enable", default=True)  # 是否进行精准降落
         self.min_alt_threshold = rosparam_field("min_alt_threshold", 0.5)
-        controller_name = rospy.get_param("/mavproxy/control/controller_name", None)
-        self.control = BaseController.create(controller_name)
+        self.controller_name = rospy.get_param("/mavproxy/control/controller_name", None)
+        self.control = BaseController.create(self.controller_name)
         self.do_send_cmd = self.control.do_send_cmd
         self.pland_enable = self.control.is_pland_enable() and self.pland_enable
 
@@ -850,6 +860,15 @@ class Control(CallbackManager, ROSProxy):
             }
         )
         logger.info("publish done")
+        if self.controller_name == "dog":
+            while True:
+                try:
+                    res = post_json("set_param", data=dict(param=dict(DISARM_DELAY=dict(value=0))))
+                    if res.json().get("status", None) == "success":
+                        break
+                except:
+                    pass
+                time.sleep(1)
 
     def do_ws_pub(self, data: dict):
         self.ws_pub.publish(json.dumps(data))
@@ -939,12 +958,9 @@ class Control(CallbackManager, ROSProxy):
             self.odom.pose.pose.position.z,
         ]
         dis = np.sqrt(
-            (cur_pos[0] - goal[0]) **
-            2 +
-            (cur_pos[1] - goal[1]) **
-            2 +
-            (cur_pos[2] - goal[2]) **
-            2
+            (cur_pos[0] - goal[0]) ** 2
+            + (cur_pos[1] - goal[1]) ** 2
+            + (cur_pos[2] - goal[2]) ** 2
         )
         self.ws_pub.publish(json.dumps({"type": "state", "dis": f"{dis:.2f}"}))
         return dis < tolerance
@@ -961,45 +977,36 @@ class Control(CallbackManager, ROSProxy):
             self.do_send_cmd(p=[x, y, alt])
         else:
             # 解锁
-            out = self.prearm()["msg"]
-            if out.get("arm", False) == False:
-                raise ValueError(out["reason"])
+            if not self.arm:
+                out = self.prearm()["msg"]
+                if out.get("arm", False) == False:
+                    raise ValueError(out["reason"])
 
-            self._do_arm()
-            logger.info("Vehicle armed")
+                self._do_arm()
+                logger.info("Vehicle armed")
             # 持续发布目标点
             logger.info("Taking off...")
             self.control.do_takeoff(alt)
             logger.info("Takeoff command finished.")
 
-    def quaternion_to_enu_yaw(self, quaternion):
+    def quaternion_to_ned_yaw(self, quaternion):
         """
-        将四元数转换为ENU坐标系的Yaw角
-
-        参数:
-            quaternion: [x, y, z, w]
-
-        返回:
-            yaw_enu_deg: ENU坐标系下的航向角（0-360°，0°=北）
+        将四元数(ENU系)转换为罗盘航向角 (Compass Heading / NED Yaw)
+        0° = 北，90° = 东，顺时针为正
         """
-        # 转换为欧拉角（顺序：roll, pitch, yaw）
-        # 注意：这是机体坐标系相对于ENU坐标系的旋转
         euler = euler_from_quaternion(quaternion)
-        # MAVROS默认发布的是机体系到ENU的旋转
-        # 机体系：X前，Y左，Z上
-        # ENU系：X东，Y北，Z天
-        # 从四元数得到的yaw是机体相对于ENU的航向
-        # 但需要调整以获得正确的ENU航向
-        yaw_rad = euler[2]  # 机头方向相对于东轴的夹角
-        # 转换为ENU航向：从北开始，顺时针为正
-        # 公式：enu_yaw = 90° - yaw_rad（度数）
-        enu_yaw_rad = math.pi / 2 - yaw_rad
-        # 规范化到0-2π范围
-        if enu_yaw_rad < 0:
-            enu_yaw_rad += 2 * math.pi
-        if enu_yaw_rad > 2 * math.pi:
-            enu_yaw_rad -= 2 * math.pi
-        return enu_yaw_rad
+        yaw_rad = euler[2]  # ENU yaw (东为0)
+
+        # 转换为罗盘航向：90度(北) - ENU航向
+        heading_rad = math.pi / 2 - yaw_rad
+
+        # 规范化到 0 ~ 2pi 范围
+        if heading_rad < 0:
+            heading_rad += 2 * math.pi
+        if heading_rad >= 2 * math.pi:
+            heading_rad -= 2 * math.pi
+
+        return heading_rad
 
     def enu2gps(self, enu):
         """
@@ -1108,7 +1115,10 @@ class Control(CallbackManager, ROSProxy):
 
     @ros.topic("/mavros/global_position/raw/gps_vel", TwistStamped, 10)
     def gps_vel_cb(self, msg: TwistStamped):
-        self.do_ws_pub(dict(x_vel=msg.twist.linear.x, y_vel=msg.twist.linear.y))
+        # enu -> ned
+        vx = msg.twist.linear.y
+        vy = msg.twist.linear.x
+        self.do_ws_pub(dict(x_vel=vx, y_vel=vy))
 
     @ros.topic("/mavros/home_position/home", HomePosition)
     def home_callback(self, msg: HomePosition):
@@ -1137,7 +1147,7 @@ class Control(CallbackManager, ROSProxy):
         self.runner.trigger(CEventType.WP_FINISH)
 
     @ros.topic("/mavros/local_position/odom", Odometry)
-    def odom_cb(self, msg):
+    def odom_cb(self, msg: Odometry):
         with self.odom_lock:
             self.odom = msg
         quaternion = [
@@ -1146,8 +1156,10 @@ class Control(CallbackManager, ROSProxy):
             msg.pose.pose.orientation.z,
             msg.pose.pose.orientation.w,
         ]
-        self.yaw = self.quaternion_to_enu_yaw(quaternion)
-        self.do_ws_pub(dict(yaw=self.yaw))
+        self.yaw = self.quaternion_to_ned_yaw(quaternion)
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        self.do_ws_pub(dict(yaw=self.yaw, x_vel_body=vx, v_vel_body=vy))
 
     @ros.topic("/UAV0/perception/object_location/location_vel", PointObj)
     def target_cb(self, msg):
@@ -1247,7 +1259,10 @@ class Control(CallbackManager, ROSProxy):
             [quat.x, quat.y, quat.z, quat.w]
         )
         self.landing_target = (
-            msg.header.stamp, msg.pose.position.x, msg.pose.position.y, yaw
+            msg.header.stamp,
+            msg.pose.position.x,
+            msg.pose.position.y,
+            yaw,
         )
 
     @ros.topic("/mavros/distance_sensor/rangefinder_pub", Range)
@@ -1278,7 +1293,7 @@ class Control(CallbackManager, ROSProxy):
         - data.vel     : 期望飞行速度（m/s）
         - data.yaw     : 目标偏航角（ENU弧度，可为 None）；到达终点后调整到此yaw，None则不调整
         - data.fix_yaw : 是否固定机头方向
-                         True  → 运动全程锁定进入时的初始机头朝向（posvel_init_yaw）
+                         True  → 运动全程锁定目标点的机头朝向
                          False → 机头始终朝向运动方向（实时更新yaw）
         - data.timeout : 接口的超时时间
 
@@ -1288,7 +1303,7 @@ class Control(CallbackManager, ROSProxy):
 
         fix_yaw 影响的仅是 POSVEL_MOVE 过程中的 yaw 控制方式：
 
-        - fix_yaw=True : 每帧发 yaw=posvel_init_yaw（进入时记录的初始机头）
+        - fix_yaw=True : 每帧发 yaw=目标点的yaw
         - fix_yaw=False: 每帧发 yaw=当前→目标的方位角（机头跟随运动方向）
         """
         # 记录进入 posvel 模式之前的状态（排除 posvel 内部状态自身，避免覆盖）
@@ -1307,7 +1322,6 @@ class Control(CallbackManager, ROSProxy):
             self.runner.trigger(CEventType.SET_POSVEL, pos=data.pos, vel=data.vel)
         else:
             # 从其他状态进入：记录当前机头朝向（fix_yaw=True 时全程使用），然后直接进入移动
-            self.posvel_init_yaw = self.yaw  # 记录进入时的初始机头朝向（ENU弧度）
             self.runner.step(NodeType.POSVEL_MOVE)
         return SUCCESS_RESPONSE()
 
@@ -1410,6 +1424,10 @@ class Control(CallbackManager, ROSProxy):
     @http_proxy.get("/prearms")
     def prearm(self):
         # mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK
+        if (
+            rospy.get_param("/mavros/param/ARMING_CHECK", 0) == 0
+        ):  # 禁用prearm 检查，则始终返回True
+            return SUCCESS_RESPONSE({"arm": True})
         self.state = ""
         response = self.cmd_service(
             command=401,  # MAV_CMD_RUN_PREARM_CHECKS

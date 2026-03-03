@@ -23,10 +23,8 @@ class SetPosVelModel(BaseModel):
     pos: Tuple[float, float, float]  # 目标点, 到达速度=0
     vel: float  # 最大速度限制
     yaw: Optional[float] = None  # 到达后的期望偏航
-    fix_yaw: Optional[bool] = (True)  # True: 运动中始终固定为初始航向/False: 调整为目标点后再运动
+    fix_yaw: Optional[bool] = True  # True: 运动中始终固定为yaw指定的方向/False: 调整为目标点后再运动
     timeout: Optional[float] = 2  # 接口超时时间
-
-
 
 
 # Other
@@ -51,8 +49,6 @@ class SetExposureModel(BaseModel):
 
 class StartDetectModel(BaseModel):
     type: str = "smoke"
-
-
 
 
 # Param

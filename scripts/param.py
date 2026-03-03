@@ -49,6 +49,12 @@ class Param(CallbackManager):
         self.param_set_service = rospy.ServiceProxy("/mavros/param/set", ParamSet)
         self._pull_param()
 
+    def _post_init(self):
+        param = rospy.get_param("param", {}).get("param", {})
+        for n, v in param.items():
+            self._set_param(n, v)
+            
+    
     def _pull_param(self):
         param_pull = rospy.ServiceProxy("/mavros/param/pull", ParamPull)
         self.param_num = 0
