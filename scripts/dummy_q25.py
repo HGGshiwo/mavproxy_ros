@@ -1,22 +1,21 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
+import concurrent
 import concurrent.futures
 import math
+import random
 import socket
 import threading
 import time
-import random
 from typing import Any, Optional, Tuple
-
-import concurrent
 
 # ROS imports
 ros_loaded = False
 try:
     import rospy
-    from std_msgs.msg import String, Float32
     from geometry_msgs.msg import Twist
+    from std_msgs.msg import Float32, String
 
     ros_loaded = True
 except ImportError:
@@ -29,6 +28,7 @@ MAX_VEL_X = 1
 MAX_VEL_Y = 1
 MAX_ACCEL = 1.0
 MAX_ANGULAR_ACCEL = 0.2
+
 
 # -------------------------- 机器人状态管理器 --------------------------
 class Q25RobotState:
@@ -70,7 +70,9 @@ class Q25RobotState:
         self.battery_level = 85  # 电池电量（%）
         self.is_charging = False  # 是否充电中
         self.motor_temps = [35.0 + random.uniform(0, 5) for _ in range(12)]  # 电机温度
-        self.driver_temps = [32.0 + random.uniform(0, 4) for _ in range(12)]  # 驱动器温度
+        self.driver_temps = [
+            32.0 + random.uniform(0, 4) for _ in range(12)
+        ]  # 驱动器温度
         self.cpu_temp = 45.0 + random.uniform(0, 3)  # CPU温度
         self.cpu_freq = 1800.0 + random.uniform(0, 200)  # CPU主频（MHz）
 
@@ -103,13 +105,19 @@ class Q25RobotState:
         self.last_heartbeat_time = time.time()
         self.connection_alive = True
 
-    def handle_command(self, cmd_type: CommandType, param: int, data: Any, current_state: str = "passive") -> Tuple[bool, Optional[str]]:
+    def handle_command(
+        self,
+        cmd_type: CommandType,
+        param: int,
+        data: Any,
+        current_state: str = "passive",
+    ) -> Tuple[bool, Optional[str]]:
         """处理控制指令，返回(执行结果, 指令信息用于转发)"""
         with self.lock:
             if not self.connection_alive:
                 rospy.loginfo("⚠️  连接已断开，拒绝执行指令")
                 return False, None
-            
+
             try:
                 if cmd_type == CommandType.MANUAL_HEARTBEAT:
                     self.update_heartbeat()
@@ -127,10 +135,12 @@ class Q25RobotState:
                         return True, "fixedstand"
                     else:
                         if current_state in ["passive"]:
-                            new_state = "fixedstand"
+                            new_state = "freestand"
                         else:
                             new_state = "passive"
-                        rospy.loginfo(f"🔄  切换姿态：{'趴下' if new_state == 'passive' else '站立'}")
+                        rospy.loginfo(
+                            f"🔄  切换姿态：{'趴下' if new_state == 'passive' else '站立'}"
+                        )
                         return True, new_state
 
                 elif cmd_type == CommandType.MOTION_MODE_MANUAL:
@@ -158,7 +168,9 @@ class Q25RobotState:
                         rospy.loginfo("❌  跑步步态下禁止切换为匍匐高度")
                         return False, None
                     self.platform_height = param
-                    rospy.loginfo(f"📏  切换平台高度：{'匍匐' if param == 0 else '正常'}")
+                    rospy.loginfo(
+                        f"📏  切换平台高度：{'匍匐' if param == 0 else '正常'}"
+                    )
                     return True, None
 
                 elif cmd_type == CommandType.GAIT_WALK:
@@ -184,7 +196,9 @@ class Q25RobotState:
                         return False, None
                     self.speed_gear = param
                     self.max_forward_vel = 2.5 if param == 1 else 1.8
-                    rospy.loginfo(f"⚡  切换速度档位：{'高速' if param == 1 else '低速'}")
+                    rospy.loginfo(
+                        f"⚡  切换速度档位：{'高速' if param == 1 else '低速'}"
+                    )
                     return True, None
 
                 elif cmd_type == CommandType.CAMERA_CONTROL:
@@ -222,9 +236,13 @@ class Q25RobotState:
                         return False, None
                     x = param
                     if -32767 <= x <= -24576:
-                        self.vel_y = (-1) * ((x + 24576) / 8554) * self.max_forward_vel * 0.8
+                        self.vel_y = (
+                            (-1) * ((x + 24576) / 8554) * self.max_forward_vel * 0.8
+                        )
                     elif 24576 <= x <= 32767:
-                        self.vel_y = (-1) * ((x - 24576) / 8554) * self.max_forward_vel * 0.8
+                        self.vel_y = (
+                            (-1) * ((x - 24576) / 8554) * self.max_forward_vel * 0.8
+                        )
                     else:
                         self.vel_y = 0.0
                     rospy.loginfo(f"⬅️  Y轴速度：{self.vel_y:.2f} m/s")
@@ -244,7 +262,9 @@ class Q25RobotState:
 
                 elif cmd_type == CommandType.SET_AIM_POSE and isinstance(data, FireAim):
                     self.aim_pose = data
-                    rospy.loginfo(f"🎯  设置对准姿态：roll={data.roll}, pitch={data.pitch}, yaw={data.yaw}")
+                    rospy.loginfo(
+                        f"🎯  设置对准姿态：roll={data.roll}, pitch={data.pitch}, yaw={data.yaw}"
+                    )
                     return True, None
 
                 elif cmd_type == CommandType.RESET_AIM_POSE:
@@ -256,18 +276,18 @@ class Q25RobotState:
                     target_vx = data.left_y / 1e3 * MAX_VEL_X
                     target_vy = data.left_x / 1e3 * MAX_VEL_Y
                     target_yr = data.right_x / 1e3 * MAX_VEL_YAW
-                    
+
                     # 应用加速度限制
                     current_time = time.time()
                     dt = current_time - self.last_update_time
                     if dt <= 0:
                         dt = 0.05
-                    
+
                     dvx = (target_vx - self.target_vel_x) / dt
                     dvy = (target_vy - self.target_vel_y) / dt
                     dyr = (target_yr - self.target_vel_yaw) / dt
-                    
-                    linear_accel = math.sqrt(dvx ** 2 + dvy ** 2)
+
+                    linear_accel = math.sqrt(dvx**2 + dvy**2)
                     if linear_accel > MAX_ACCEL:
                         scale = MAX_ACCEL / linear_accel
                         self.target_vel_x += dvx * scale * dt
@@ -275,13 +295,13 @@ class Q25RobotState:
                     else:
                         self.target_vel_x = target_vx
                         self.target_vel_y = target_vy
-                    
+
                     if abs(dyr) > MAX_ANGULAR_ACCEL:
                         sign = 1 if dyr > 0 else -1
                         self.target_vel_yaw += sign * MAX_ANGULAR_ACCEL * dt
                     else:
                         self.target_vel_yaw = target_yr
-                    
+
                     self.vel_x = self.target_vel_x
                     self.vel_y = self.target_vel_y
                     self.vel_yaw = self.target_vel_yaw
@@ -296,7 +316,9 @@ class Q25RobotState:
                 return False, None
 
 
-def pack_report_data(cmd_enum: CommandType, state: Q25RobotState, current_state_int: int = 0) -> bytes:
+def pack_report_data(
+    cmd_enum: CommandType, state: Q25RobotState, current_state_int: int = 0
+) -> bytes:
     """打包状态上报数据"""
     current_time = time.time()
     run_time = to_uint32(current_time - state.start_time)
@@ -488,16 +510,18 @@ class Q25UDPServer:
         self.pub_robot_state = None
         self.pub_cmd_vel = None
         self._current_state = "passive"
-        
+
         if ros_loaded:
             try:
                 rospy.init_node("q25_dummy", anonymous=True)
                 self.pub_robot_state = rospy.Publisher(
                     "/robot_state", String, queue_size=10
                 )
-                self.pub_cmd_vel = rospy.Publisher("/go2/cmd_vel", Twist, queue_size=10)
+                self.pub_cmd_vel = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
                 rospy.Subscriber("/current_state", String, self.current_state_callback)
-                rospy.loginfo("ROS publishers initialized: /robot_state, /cmd_vel, /current_state")
+                rospy.loginfo(
+                    "ROS publishers initialized: /robot_state, /cmd_vel, /current_state"
+                )
             except rospy.exceptions.ROSException as e:
                 rospy.loginfo(f"WARNING: Failed to initialize ROS: {e}")
 
@@ -539,7 +563,9 @@ class Q25UDPServer:
         while self.running:
             try:
                 current_state_int = self.get_current_state_int()
-                report_data = pack_report_data(cmd_enum, self.robot_state, current_state_int)
+                report_data = pack_report_data(
+                    cmd_enum, self.robot_state, current_state_int
+                )
                 if report_data:
                     self.socket.sendto(
                         report_data, (self.report_host, self.report_port)
@@ -547,7 +573,7 @@ class Q25UDPServer:
             except Exception as e:
                 rospy.loginfo(f"❌  上报{cmd_enum.name}失败：{str(e)}")
             time.sleep(interval)
-            
+
     def current_state_callback(self, msg):
         """接收unitree_guide发布的当前状态，用于上报"""
         self._current_state = msg.data
@@ -617,7 +643,7 @@ class Q25UDPServer:
         # 执行指令
         filter = [0x21040001]
         if cmd_enum.value not in filter:
-            
+
             # rospy.loginfo(f"\n{'='*80}")
             # rospy.loginfo(f"📥  收到客户端数据 | 客户端：{addr[0]}:{addr[1]} | 长度：{len(data)}字节")
             # rospy.loginfo(f"   原始数据(十六进制)：{data.hex()}")
@@ -635,6 +661,7 @@ class Q25UDPServer:
 
         if success and ros_loaded and self.pub_robot_state is not None and cmd_info:
             self.pub_robot_state.publish(String(data=cmd_info))
+            self._current_state = cmd_info
 
         # 生成响应
         # if cmd_enum in [CommandType.CHARGE_REQUEST, CommandType.CHARGE_QUERY_STATUS]:
@@ -658,7 +685,9 @@ class Q25UDPServer:
         try:
             self.socket.bind((self.host, self.port))
         except OSError as e:
-            rospy.loginfo(f"❌ UDP服务器启动失败：端口{self.port}被占用/权限不足，错误：{str(e)}")
+            rospy.loginfo(
+                f"❌ UDP服务器启动失败：端口{self.port}被占用/权限不足，错误：{str(e)}"
+            )
             return
 
         self.running = True

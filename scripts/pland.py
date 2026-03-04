@@ -14,7 +14,10 @@ from cv_bridge import CvBridge
 from event_callback import ros
 from event_callback.core import CallbackManager, CallbackMixin
 from event_callback.ros_utils import (
-    ROSProxy, rosparam_field, rospy_init_node, rostopic_field
+    ROSProxy,
+    rosparam_field,
+    rospy_init_node,
+    rostopic_field,
 )
 from event_callback.utils import setup_logger
 from geometry_msgs.msg import PoseStamped, Quaternion
@@ -84,12 +87,12 @@ class Pland(CallbackManager, ROSProxy):
         """
         height, width = frame.shape[:2]
         img_center = np.array([width / 2, height / 2])
-        qr_center = tag.center.astype(int)[np.newaxis,:]  # (1, 2)
+        qr_center = tag.center.astype(int)[np.newaxis, :]  # (1, 2)
         tag_corner = np.array([(-1, 1, 1), (1, 1, 1), (1, -1, 1), (-1, -1, 1)])
         tag_corner = np.matmul(tag_corner, tag.homography.T)  # p' = H * p
-        z = tag_corner[:,2:3]
+        z = tag_corner[:, 2:3]
         z = np.where(np.abs(z) < 1e-6, 1e-6, z)
-        tag_corner = tag_corner[:,:2] / z
+        tag_corner = tag_corner[:, :2] / z
         points = np.concatenate([qr_center, tag_corner], axis=0)
         calib_points = self._get_calibrate_points(points)
         if calib_points is None:
@@ -113,7 +116,7 @@ class Pland(CallbackManager, ROSProxy):
         # 可选：将角度规范化到 -pi 到 +pi 之间 (防止出现 > pi 的情况)
         if yaw > np.pi:
             yaw -= 2 * np.pi
-        elif yaw < - np.pi:
+        elif yaw < -np.pi:
             yaw += 2 * np.pi
         delta = (calib_qr_center - img_center) / (2 * img_center)
         return delta[0, 0], delta[0, 1], yaw
@@ -129,8 +132,8 @@ class Pland(CallbackManager, ROSProxy):
         for idx in range(len(tag.corners)):
             cv2.line(
                 frame,
-                tuple(tag.corners[idx - 1,:].astype(int)),
-                tuple(tag.corners[idx,:].astype(int)),
+                tuple(tag.corners[idx - 1, :].astype(int)),
+                tuple(tag.corners[idx, :].astype(int)),
                 (0, 255, 0),
                 5,
             )
@@ -138,7 +141,8 @@ class Pland(CallbackManager, ROSProxy):
             frame,
             str(tag.tag_id),
             org=(
-                tag.corners[0, 0].astype(int) + 10, tag.corners[0, 1].astype(int) + 10
+                tag.corners[0, 0].astype(int) + 10,
+                tag.corners[0, 1].astype(int) + 10,
             ),
             fontFace=cv2.FONT_HERSHEY_SIMPLEX,
             fontScale=0.8,
@@ -196,7 +200,7 @@ class Pland(CallbackManager, ROSProxy):
         q_virt_inv = tft.quaternion_inverse(q_virt_list)
         q_diff = tft.quaternion_multiply(q_virt_inv, q_curr_list)
         # 将相对四元数转换为旋转矩阵
-        R_body_to_virt = tft.quaternion_matrix(q_diff)[:3,:3]
+        R_body_to_virt = tft.quaternion_matrix(q_diff)[:3, :3]
         # 4. 像素 -> 相机坐标系向量 (Camera Frame)
         N, _ = pixel_points.shape
         pixel_points_h = np.concatenate([pixel_points, np.ones((N, 1))], axis=1)
@@ -233,12 +237,12 @@ class Pland(CallbackManager, ROSProxy):
         v_virt_cam = np.matmul(v_virt_body, R_cam_to_body)  # R.T.T = R
         # 8. 投影回像素平面
         # 归一化深度 (Z=1)
-        z_coords = v_virt_cam[:,2:3]
+        z_coords = v_virt_cam[:, 2:3]
         z_coords[np.abs(z_coords) < 1e-6] = 1e-6
         v_virt_cam_norm = v_virt_cam / z_coords
         # 应用内参
         out = np.matmul(v_virt_cam_norm, K.T)
-        return out[:,:2]
+        return out[:, :2]
 
     def _set_landing_target(self, delta_x: float, delta_y: float, yaw: float):
         """
@@ -263,7 +267,9 @@ class Pland(CallbackManager, ROSProxy):
         # 发布消息
         self.landing_target_pub.publish(landing_target)
         if self.fps_helper.step(block=False):
-            logger.info(f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}")
+            logger.info(
+                f"FPS:{self.fps_helper.fps} 发送着陆目标: x={delta_x}, y={delta_y}"
+            )
 
     def _pland_cb(self, frame: npt.NDArray):
         detect_result = self._detect(frame)
@@ -275,7 +281,6 @@ class Pland(CallbackManager, ROSProxy):
                 frame = self._draw_result(frame, detect_result)
         res = self.bridge.cv2_to_imgmsg(frame, "bgr8")
         self.detect_res_pub.publish(res)
-
 
     # topic 在launch中修改
     @ros.topic("/pland_camera/image_raw", Image)

@@ -1,11 +1,9 @@
-from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 
 _controller_map = {}
 
 
 class BaseController:
-
     def __init_subclass__(cls):
         name = cls.__name__.lower().replace("controller", "")
         _controller_map[name] = cls
@@ -24,6 +22,13 @@ class BaseController:
 
         return _controller_map[name](*args, **kwargs)
 
+    def state_change(self, old_state: Any, new_state: Any):
+        """单控状态发生变化时候调用"""
+        pass
+
+    def loiter(self):
+        raise NotImplementedError()
+
     def check_alt(
         self, rel_alt: float, min_alt_threshold: float, target: float, threshold: float
     ) -> bool:
@@ -31,6 +36,11 @@ class BaseController:
 
     def check_hover(self, arm: bool, rel_alt: float) -> bool:
         """判断是否处于悬停状态"""
+        raise NotImplementedError()
+
+    def check_arrive(
+        self, cur: Tuple[float, float, float], goal: Tuple[float, float, float]
+    ) -> float:
         raise NotImplementedError()
 
     def do_takeoff(self, alt: float):

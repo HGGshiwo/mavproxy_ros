@@ -12,11 +12,12 @@ class YawController:
     """
     ENU yaw -> FLU yaw_rate
     """
+
     def __init__(self):
         self.frozen_direction: Optional[float] = None  # 接近目标时锁定的方向
         self.yr_filtered = 0.0  # 低通滤波后的 yaw rate 输出
         self.prev_yaw_err: Optional[float] = None  # 帧间 yaw 误差，用于跨 ±π 边界展开
-        
+
     def __call__(self, cur_yaw: float, target_direction: float):
         """
         Args:
@@ -26,10 +27,10 @@ class YawController:
         Returns:
             yaw_rate: FLU
         """
-        YAW_DEADBAND = 0.05    # yaw 死区 (rad ≈ 3°)，消除零点附近高频抖动
-        KP_YAW = 0.6           # yaw 比例增益，偏低以减少振荡
-        YAW_LPF_ALPHA = 0.4    # yaw 输出一阶低通滤波系数（越小越平滑）
-         
+        YAW_DEADBAND = 0.05  # yaw 死区 (rad ≈ 3°)，消除零点附近高频抖动
+        KP_YAW = 0.6  # yaw 比例增益，偏低以减少振荡
+        YAW_LPF_ALPHA = 0.4  # yaw 输出一阶低通滤波系数（越小越平滑）
+
         # 计算 yaw 误差（归一化到 [-π, π]，并做帧间展开防跨界跳变）
         yaw_err = math.atan2(
             math.sin(target_direction - cur_yaw),
@@ -51,7 +52,9 @@ class YawController:
             yr_raw = max(-1.0, min(1.0, yaw_err * KP_YAW))
 
         # 一阶低通滤波（EMA），平滑 yaw rate 输出，减少符号反转引起的抖动
-        self.yr_filtered = YAW_LPF_ALPHA * yr_raw + (1.0 - YAW_LPF_ALPHA) * self.yr_filtered
+        self.yr_filtered = (
+            YAW_LPF_ALPHA * yr_raw + (1.0 - YAW_LPF_ALPHA) * self.yr_filtered
+        )
         yr = self.yr_filtered
         return yr
 
@@ -694,7 +697,9 @@ def pack_q25_udp_cmd(
 
         data_type = type(data)
         if data_type not in _DATA_TYPE_TO_COMMAND:
-            raise ValueError(f"仅支持FireAim/AxisCommand类型自动匹配，当前为{data_type}")
+            raise ValueError(
+                f"仅支持FireAim/AxisCommand类型自动匹配，当前为{data_type}"
+            )
 
         command_type = _DATA_TYPE_TO_COMMAND[data_type]
     if command_type not in command_info_map:

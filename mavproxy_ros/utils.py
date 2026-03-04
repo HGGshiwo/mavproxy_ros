@@ -14,7 +14,7 @@ def ERROR_RESPONSE(msg):
 
 class FPSHelper:
 
-    def __init__(self, fps= -1, ps_cb=None):
+    def __init__(self, fps=-1, ps_cb=None):
         self.target_fps = fps
         self.start = time.time()
         self.cnt_start = time.time()

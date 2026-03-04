@@ -1,7 +1,8 @@
 import math
 from logging import getLogger
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+import numpy as np
 import rospy
 from geometry_msgs.msg import Vector3
 from mavros_msgs.msg import PositionTarget
@@ -14,7 +15,6 @@ logger = getLogger(__name__)
 
 
 class DroneController(BaseController):
-
     def __init__(self):
         self.setpoint_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
@@ -42,6 +42,21 @@ class DroneController(BaseController):
 
     def do_land(self):
         self.set_mode_service(0, "LAND")
+
+    def loiter(self):
+        self.set_mode_service(0, "LOITER")
+
+    def check_arrive(
+        self,
+        cur_pos: Tuple[float, float, float],
+        goal: Tuple[float, float, float],
+    ):
+        dis = np.sqrt(
+            (cur_pos[0] - goal[0]) ** 2
+            + (cur_pos[1] - goal[1]) ** 2
+            + (cur_pos[2] - goal[2]) ** 2
+        )
+        return dis
 
     def do_send_cmd(
         self,

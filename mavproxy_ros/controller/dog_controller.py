@@ -8,11 +8,12 @@ from logging import getLogger
 from typing import Optional
 
 import numpy as np
-
 import rospy
-from event_callback import CallbackManager, http
-from event_callback.components.http.core import HTTPConfig
+import tf
+import tf.transformations
+from event_callback import CallbackManager, HTTP_ProxyConfig, http_proxy
 from event_callback.components.http.message_handler import MessageType
+from event_callback.components.ros import ros
 from event_callback.components.socket import (
     SocketClientConfig,
     SocketServerConfig,
@@ -20,11 +21,11 @@ from event_callback.components.socket import (
     sockets,
 )
 from event_callback.utils import setup_logger
+from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
 from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 
 from mavproxy_ros.utils import post_json
-import tf
-import tf.transformations
 
 from .base_controller import BaseController
 from .dog_utils import *
@@ -80,7 +81,7 @@ class DogController(CallbackManager, BaseController):
                 decode=False,
                 router=router,
             ),
-            HTTPConfig(port=8001),
+            HTTP_ProxyConfig(),
         ]
         self.max_backward_vel = None
         self.max_forward_vel = None
@@ -95,7 +96,7 @@ class DogController(CallbackManager, BaseController):
         self._last_yaw_rate = 0.0
         self._last_cmd_time = None
         self._accel_lock = threading.Lock()
-        super().__init__(config)
+        CallbackManager.__init__(self, config)
         # 订阅 ENU odom，用于位置控制
         self._odom: Optional[Odometry] = None
         self._odom_lock = threading.Lock()
@@ -106,6 +107,8 @@ class DogController(CallbackManager, BaseController):
         self._pos_ctrl_thread: Optional[threading.Thread] = None
         self._pos_ctrl_stop = threading.Event()
         self._pos_ctrl_lock = threading.Lock()
+
+        self.wsproxy = ros.create_wsproxy()
         heartbeat_t = threading.Thread(
             target=self.heartbeat_thread, daemon=True, name="heartbeat-thread"
         )
@@ -128,6 +131,20 @@ class DogController(CallbackManager, BaseController):
     def do_land(self):
         data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
         socketc.send_to_server(self, data)
+
+    def loiter(self):
+        self._stop_position_control()
+        for i in range(10):
+            self._send_velocity_cmd([0, 0, 0], None, frame="body")
+            time.sleep(0.1)
+
+    def check_arrive(
+        self,
+        cur_pos: Tuple[float, float, float],
+        goal: Tuple[float, float, float],
+    ):
+        dis = np.sqrt((cur_pos[0] - goal[0]) ** 2 + (cur_pos[1] - goal[1]) ** 2)
+        return dis
 
     def _odom_callback(self, msg: Odometry):
         with self._odom_lock:
@@ -194,6 +211,7 @@ class DogController(CallbackManager, BaseController):
           "body" — 机体坐标系下: x为前, y为左, z为下
         """
         resolved_frame: str = frame if frame is not None else "enu"
+        print(p, v, a, frame)
         if v is not None:
             self._stop_position_control()
             self._send_velocity_cmd(v, yaw_rate, resolved_frame)
@@ -302,11 +320,23 @@ class DogController(CallbackManager, BaseController):
             )
             frame = "enu"  # 后续统一按 ENU 处理
 
-        FREEZE_DIST = 0.8  # 距目标 < 此值时锁定 target_direction (m)，防位置噪声驱动方向跳变
+        FREEZE_DIST = (
+            0.8  # 距目标 < 此值时锁定 target_direction (m)，防位置噪声驱动方向跳变
+        )
 
         logger.info(f"位置控制启动: target=({tx:.2f}, {ty:.2f}), frame={frame}")
         frozen_direction: Optional[float] = None  # 接近目标时锁定的方向
         compute_yaw_rate = YawController()
+
+        goal_pub = rospy.Publisher("/move_base_simple/goal3", PoseStamped, queue_size=1)
+        goal = PoseStamped()
+        goal.header.frame_id = "map"
+        goal.header.stamp = rospy.Time.now()
+        goal.pose.position.x = tx
+        goal.pose.position.y = ty
+        goal.pose.orientation.w = 1.0
+        goal_pub.publish(goal)
+
         while not self._pos_ctrl_stop.is_set():
             cur_pos = self._get_current_pos_enu()
             if cur_pos is None:
@@ -341,14 +371,22 @@ class DogController(CallbackManager, BaseController):
 
             yr = compute_yaw_rate(cur_yaw, target_direction)
 
-            scale = math.cos(np.clip(np.sqrt(np.abs(compute_yaw_rate.prev_yaw_err)) * 3, -np.pi, np.pi))
+            scale = math.cos(
+                np.clip(
+                    np.sqrt(np.abs(compute_yaw_rate.prev_yaw_err)) * 3, -np.pi, np.pi
+                )
+            )
+
+            # 距离小于4m, 使用二次函数调整
+            if dist < 4:
+                dist = dist * dist / 16
             vx_body = min(KP * dist, MAX_VEL) * max(0.0, scale)
             vy_body = 0.0
 
             vx_body, vy_body, yr = self._limit_acceleration(vx_body, vy_body, yr)
 
             logger.error(
-                f"dir={target_direction:.2f} cur_yaw={cur_yaw:.2f} err={compute_yaw_rate.prev_yaw_err:.2f} yr={yr:.2f} vx={vx_body:.2f}"
+                f"dis_err={dist:.2f} dir={target_direction:.2f} cur_yaw={cur_yaw:.2f} err={compute_yaw_rate.prev_yaw_err:.2f} yr={yr:.2f} vx={vx_body:.2f}"
             )
 
             with self.v_max_lock:
@@ -482,7 +520,7 @@ class DogController(CallbackManager, BaseController):
             return
 
         json_data = {"battery_level": data_obj.level}
-        http.ws_send(self, json_data, MessageType.STATE)
+        self.wsproxy.state(json_data)
 
     @sockets.recv(CommandType.MOTION_STATE_REPORT, frequency=1)
     def motion_state_report(self, data: bytes):
@@ -536,16 +574,17 @@ class DogController(CallbackManager, BaseController):
         )
         self.basic_state = data_obj.basic_state
         self.is_run = data_obj.gait_state == 0x23
-        http.ws_send(
-            self,
-            dict(
-                basic_state_desc=basic_state_desc,
-                gait_desc=gait_desc,
-                max_forward_vel=data_obj.max_forward_vel,
-                max_backward_vel=data_obj.max_backward_vel,
-            ),
-            MessageType.STATE,
-        )
+        # http_proxy.ws_send(
+        #     self,
+        #     dict(
+        #         basic_state_desc=basic_state_desc,
+        #         gait_desc=gait_desc,
+        #         max_forward_vel=data_obj.max_forward_vel,
+        #         max_backward_vel=data_obj.max_backward_vel,
+        #     ),
+        #     MessageType.STATE,
+        # )
+        self.wsproxy.state(dict(basic_state=basic_state_desc))
 
     @sockets.recv(CommandType.RUN_STATUS_REPORT, frequency=1)
     def run_status_report(self, data: bytes):
@@ -584,8 +623,10 @@ class DogController(CallbackManager, BaseController):
             "motor_heat_warn": data_obj.motor_heat_warn,
             "battery_low_warn": data_obj.battery_low_warn,
         }
-        error = ", ".join([k for k, v in error.items() if v is True])
-        http.ws_send(self, dict(error=error), MessageType.ERROR)
+        error = [k for k, v in error.items() if v is True]
+        if len(error) != 0:
+            error = ", ".join(error)
+            self.wsproxy.error(error)
 
     # @sockets.recv(CommandType.SENSOR_DATA_REPORT, frequency=10)
     # def sensor_data_report(self, data: bytes):
@@ -609,7 +650,7 @@ class DogController(CallbackManager, BaseController):
     #         "joint_vel": self._format_joint_data(data_obj.joint_vel),
     #         "joint_torque": self._format_joint_data(data_obj.joint_tau),
     #     }
-    # http.ws_send(self, json_data, MessageType.STATE)
+    # http_proxy.ws_send(self, json_data, MessageType.STATE)
     # @sockets.recv(CommandType.CONTROLLER_SAFE_DATA_REPORT, frequency=1)
     # def controller_safe_report(self, data: bytes):
     #     """接收运动控制系统数据（1Hz）"""
@@ -626,7 +667,7 @@ class DogController(CallbackManager, BaseController):
     #             "frequency": round(data_obj.cpu_info.frequency, 0),
     #         },
     #     }
-    #     http.ws_send(self, json_data, MessageType.STATE)
+    #     http_proxy.ws_send(self, json_data, MessageType.STATE)
     # @sockets.recv(CommandType.BATTERY_CHARGE_STATE_REPORT, frequency=10)
     # def battery_charge_report(self, data: bytes):
     #     """接收电池充电状态数据（0.5Hz）"""
@@ -638,7 +679,7 @@ class DogController(CallbackManager, BaseController):
     #         "is_charging": data_obj.is_charging,
     #         "charge_desc": "充电中" if data_obj.is_charging else "未充电",
     #     }
-    #     http.ws_send(self, json_data, MessageType.STATE)
+    #     http_proxy.ws_send(self, json_data, MessageType.STATE)
     @sockets.recv(CommandType.ERROR_CODE_REPORT, frequency=10)
     def error_code_report(self, data: bytes):
         """接收错误码数据"""
@@ -657,7 +698,7 @@ class DogController(CallbackManager, BaseController):
         error = {
             level.name.lower(): f"0x{hex(data_obj.error_code)}: {data_obj.error_msg}"
         }
-        http.ws_send(self, error, level)
+        self.wsproxy.error(error)
 
     # ===================== 辅助工具方法 =====================
     @staticmethod

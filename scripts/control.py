@@ -52,7 +52,9 @@ from mavproxy_ros.utils import SUCCESS_RESPONSE, post_json
 STOP_SPAN = 100  # 检测到目标后抑制重复检测的冷却时间(s)
 TAKEOFF_THRESHOLD = 0.05  # 起飞/调高到达判定阈值(比例)，实际误差 = 目标高度 × 此值
 LIFTING_TIMEOUT = 3  # 调整高度卡死超时(s)：周期内高度/偏航变化 < 0.1 则强制进入 WP
-LIFTING_STALL_THRESHOLD = 0.1  # 调整高度卡死判定阈值：高度或偏航变化量 < 此值视为卡死(m/rad)
+
+# 调整高度卡死判定阈值：高度或偏航变化量 < 此值视为卡死(m/rad)
+LIFTING_STALL_THRESHOLD = 0.1  
 YAW_TOLERANCE = 0.1  # 航向对齐容差(rad)，用于 LiftingNode 和 PosVelYawNode
 POSVEL_ARRIVE_DISTANCE = 0.5  # posvel 到达目标点的判定距离(m)
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
@@ -184,7 +186,9 @@ class CtrlNode(_CtrlNode):
                 angle = float(angle)
             except Exception:
                 self.ws_pub.publish(
-                    json.dumps({"type": "error", "error": f"参数: {angle} 无法转为数字!"})
+                    json.dumps(
+                        {"type": "error", "error": f"参数: {angle} 无法转为数字!"}
+                    )
                 )
                 return
 
@@ -794,8 +798,12 @@ class Control(CallbackManager, ROSProxy):
         # posvel fix_yaw 模式使用的变量
         self.posvel_target_pos = None  # 目标GPS坐标 [lon, lat, alt]
         self.posvel_target_vel = 0  # 目标速度
-        self.posvel_target_yaw = None  # 目标偏航角（ENU弧度），到达终点后调整到此yaw；None表示不调整
-        self.posvel_fix_yaw = True  # 是否固定机头方向（True=锁定初始yaw，False=跟随运动方向）
+        self.posvel_target_yaw = (
+            None  # 目标偏航角（ENU弧度），到达终点后调整到此yaw；None表示不调整
+        )
+        self.posvel_fix_yaw = (
+            True  # 是否固定机头方向（True=锁定初始yaw，False=跟随运动方向）
+        )
         self.posvel_timeout = 2.0  # 超时时长（秒），由接口传入
         self.posvel_node_before = NodeType.HOVER  # 进入posvel模式前的状态
         self.runner = Runner(
@@ -832,10 +840,16 @@ class Control(CallbackManager, ROSProxy):
             "/UAV0/perception/object_location/obj_lla", PointStamped, queue_size=1
         )
         self.planner_enable = rosparam_field("planner_enable", True)
-        self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
-        self.pland_enable = rosparam_field("pland_enable", default=True)  # 是否进行精准降落
+        self.auto_planner_enable = (
+            self.planner_enable
+        )  # 是否允许在停止检测后自动打开避障
+        self.pland_enable = rosparam_field(
+            "pland_enable", default=True
+        )  # 是否进行精准降落
         self.min_alt_threshold = rosparam_field("min_alt_threshold", 0.5)
-        self.controller_name = rospy.get_param("/mavproxy/control/controller_name", None)
+        self.controller_name = rospy.get_param(
+            "/mavproxy/control/controller_name", None
+        )
         self.control = BaseController.create(self.controller_name)
         self.do_send_cmd = self.control.do_send_cmd
         self.pland_enable = self.control.is_pland_enable() and self.pland_enable
@@ -863,7 +877,9 @@ class Control(CallbackManager, ROSProxy):
         if self.controller_name == "dog":
             while True:
                 try:
-                    res = post_json("set_param", data=dict(param=dict(DISARM_DELAY=dict(value=0))))
+                    res = post_json(
+                        "set_param", data=dict(param=dict(DISARM_DELAY=dict(value=0)))
+                    )
                     if res.json().get("status", None) == "success":
                         break
                 except:
@@ -875,6 +891,7 @@ class Control(CallbackManager, ROSProxy):
 
     def step_cb(self, prev, cur):
         self.ws_pub.publish(json.dumps({"type": "state", "state": cur.value}))
+        self.control.state_change(prev, cur)
 
     def enu_xy2yaw(self, diff_x, diff_y):
         """注意, yaw正东为0度,逆时针为正!"""
@@ -957,11 +974,7 @@ class Control(CallbackManager, ROSProxy):
             self.odom.pose.pose.position.y,
             self.odom.pose.pose.position.z,
         ]
-        dis = np.sqrt(
-            (cur_pos[0] - goal[0]) ** 2
-            + (cur_pos[1] - goal[1]) ** 2
-            + (cur_pos[2] - goal[2]) ** 2
-        )
+        dis = self.control.check_arrive(cur_pos, goal)
         self.ws_pub.publish(json.dumps({"type": "state", "dis": f"{dis:.2f}"}))
         return dis < tolerance
 
@@ -1373,6 +1386,13 @@ class Control(CallbackManager, ROSProxy):
     @http_proxy.post("/takeoff")
     def takeoff(self, data: TakeoffModel):
         self.runner.trigger(CEventType.SET_TAKEOFF, alt=data.alt)
+        return SUCCESS_RESPONSE()
+
+    @http_proxy.post("/loiter")
+    def loiter(self):
+        if self.runner.node.type not in [NodeType.INIT, NodeType.GROUND]:
+            self.runner.step(NodeType.HOVER)
+        self.control.loiter()
         return SUCCESS_RESPONSE()
 
     @http_proxy.get("/get_gps")
