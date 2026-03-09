@@ -56,7 +56,8 @@ class Connection(CallbackManager):
     @ros.topic("/mavros/state", State)
     def mode_cb(self, data: State):
         if data.armed == False and self.armed != False:
-            self._publish_event(dict(event="disarm"))
+            # self._publish_event(dict(event="disarm"))
+            pass
         elif data.armed == True and self.armed != True:
             self._publish_event(dict(event="arm"))
         arm_desc = "已解锁" if data.armed else "未解锁"

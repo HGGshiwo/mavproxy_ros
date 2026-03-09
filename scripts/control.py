@@ -6,8 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-import rosparam
-
 from mavproxy_ros.controller import BaseController
 
 _SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -43,18 +41,17 @@ from tf.transformations import euler_from_quaternion
 from visualization_msgs.msg import Marker
 
 from mavproxy_ros.control_model import *
-from mavproxy_ros.controller.drone_controller import DroneController
 from mavproxy_ros.ctrl_node import CtrlNode as _CtrlNode
 from mavproxy_ros.ctrl_node import EventType, Runner
 from mavproxy_ros.pid_controller import PIDController
-from mavproxy_ros.utils import SUCCESS_RESPONSE, post_json
+from mavproxy_ros.utils import ERROR_RESPONSE, SUCCESS_RESPONSE, post_json
 
 STOP_SPAN = 100  # 检测到目标后抑制重复检测的冷却时间(s)
 TAKEOFF_THRESHOLD = 0.05  # 起飞/调高到达判定阈值(比例)，实际误差 = 目标高度 × 此值
 LIFTING_TIMEOUT = 3  # 调整高度卡死超时(s)：周期内高度/偏航变化 < 0.1 则强制进入 WP
 
 # 调整高度卡死判定阈值：高度或偏航变化量 < 此值视为卡死(m/rad)
-LIFTING_STALL_THRESHOLD = 0.1  
+LIFTING_STALL_THRESHOLD = 0.1
 YAW_TOLERANCE = 0.1  # 航向对齐容差(rad)，用于 LiftingNode 和 PosVelYawNode
 POSVEL_ARRIVE_DISTANCE = 0.5  # posvel 到达目标点的判定距离(m)
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
@@ -91,7 +88,6 @@ class CtrlNode(_CtrlNode):
     land_enable = True
     detect_enable = False
     wp_enable = False
-    takeoff_enable = False
     ground_enable = True  # 是否进入ground状态
     context: Control
 
@@ -101,10 +97,6 @@ class CtrlNode(_CtrlNode):
             self._register(CEventType.SET_LAND, self.land_cb)
         if self.detect_enable:
             self._register(CEventType.DETECT, self.detect_cb)
-        if self.wp_enable:
-            self._register(CEventType.SET_WP, self.set_wp_cb)
-        if self.takeoff_enable:
-            self._register(CEventType.SET_TAKEOFF, self.takeoff_cb)
         if self.ground_enable:
             self._register(CEventType.DISARM, self.land_done_cb)
 
@@ -126,37 +118,6 @@ class CtrlNode(_CtrlNode):
             context.node_before_detect = self.type
         context.do_detect(msg)
         self.step(NodeType.FOLLOW)
-
-    def set_wp(self, waypoint: list, nodeEventList: list | None, land: bool, rtl: bool):
-        logger.info(f"set wp return: {rtl} wp: {waypoint}")
-        context = self.context
-        context.land = land or rtl
-        context.nodeEventList = nodeEventList
-        if rtl:
-            return_alt = waypoint[-1][-1]  # 最后一个点的高度作为返航高度
-            waypoint.append([context.takeoff_lon, context.takeoff_lat, return_alt])
-        context.waypoint = waypoint[1:]
-        context.wp_idx = 0
-
-    def set_wp_cb(
-        self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
-    ):
-        if len(waypoint) == 0 and not rtl:
-            raise ValueError("No waypoint found!")
-
-        if (len(waypoint) == 1 and not rtl) or (rtl and len(waypoint) == 0):
-            # 如果只有一个航点(rtl为0个), 本来是不允许的, 现在额外插入一个
-            waypoint.insert(0, [0, 0, 10])
-        self.set_wp(waypoint, nodeEventList, land, rtl)
-        context = self.context
-        context.set_mode_service(0, "GUIDED")
-        context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl)
-        self.step(NodeType.LIFTING)
-
-    def takeoff_cb(self, alt: float):
-        context = self.context
-        context.takeoff_alt = alt
-        self.step(NodeType.TAKING_OFF)
 
     def run_wp_event(self, event: dict):
         event_type = event["eventType"]
@@ -232,20 +193,8 @@ class GroundNode(CtrlNode):
     - 检测到已在空中（check_hover）→ HOVER（掉电重启场景）
     """
 
-    takeoff_enable = True
-
     def __init__(self):
         super().__init__(NodeType.GROUND)
-
-    @CtrlNode.on(CEventType.SET_WP)
-    def set_wp_cb(
-        self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
-    ):
-        context = self.context
-        context.takeoff_alt = waypoint[0][-1]
-        self.set_wp(waypoint, nodeEventList, land, rtl)
-        context.do_pub_wp(waypoint[0:1] + context.waypoint, land or rtl)
-        self.step(NodeType.TAKING_OFF2)
 
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
@@ -263,7 +212,6 @@ class TakeoffNode(CtrlNode):
 
     land_enable = True
     wp_enable = True
-    takeoff_enable = True
 
     def __init__(self):
         super().__init__(NodeType.TAKING_OFF)
@@ -289,7 +237,6 @@ class Takeoff2Node(CtrlNode):
 
     wp_enable = True
     land_enable = True
-    takeoff_enable = True
 
     def __init__(self):
         super().__init__(NodeType.TAKING_OFF2)
@@ -301,7 +248,9 @@ class Takeoff2Node(CtrlNode):
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
-        if context.check_alt(context.takeoff_alt, TAKEOFF_THRESHOLD):
+        if not context.control.is_alt_enable() or context.check_alt(
+            context.takeoff_alt, TAKEOFF_THRESHOLD
+        ):
             context.do_pub_takeoff()
             self.step(NodeType.LIFTING)
 
@@ -319,7 +268,6 @@ class HoverNode(CtrlNode):
     detect_enable = True
     land_enable = True
     wp_enable = True
-    takeoff_enable = True
 
     def __init__(self):
         super().__init__(NodeType.HOVER)
@@ -377,6 +325,8 @@ class LiftingNode(CtrlNode):
         # context.do_send_cmd(yaw=context.lift_yaw)
         yaw_diff = context.check_yaw(context.lift_yaw)
         alt_diff = math.fabs(context.rel_alt - context.lift_alt)
+        alt_diff = alt_diff if context.control.is_alt_enable() else 0
+
         context.ws_pub.publish(
             json.dumps(
                 {
@@ -387,20 +337,23 @@ class LiftingNode(CtrlNode):
             )
         )
         # 达到目标高度和航向则立即退出
-        if context.check_alt(context.lift_alt, TAKEOFF_THRESHOLD) and (
-            context.lift_yaw is None or yaw_diff < YAW_TOLERANCE
-        ):
-            context.do_send_cmd(v=[0, 0, 0])
-            self.step(NodeType.WP)
-            return
-
-        if time.time() - self.start_time > LIFTING_TIMEOUT:  # 卡死超时，强制进入 WP
-            if (
-                math.fabs(self.last_alt - context.rel_alt) < LIFTING_STALL_THRESHOLD
-                and math.fabs(self.last_yaw - context.yaw) < LIFTING_STALL_THRESHOLD
+        if context.lift_yaw is None or yaw_diff < YAW_TOLERANCE:
+            if not context.control.is_alt_enable() or context.check_alt(
+                context.lift_alt, TAKEOFF_THRESHOLD
             ):
                 context.do_send_cmd(v=[0, 0, 0])
                 self.step(NodeType.WP)
+                return
+
+        if time.time() - self.start_time > LIFTING_TIMEOUT:  # 卡死超时，强制进入 WP
+            if math.fabs(self.last_yaw - context.yaw) < LIFTING_STALL_THRESHOLD:
+                if (
+                    not context.control.is_alt_enable()
+                    or math.fabs(self.last_alt - context.rel_alt)
+                    < LIFTING_STALL_THRESHOLD
+                ):
+                    context.do_send_cmd(v=[0, 0, 0])
+                    self.step(NodeType.WP)
             self.last_yaw = context.yaw
             self.last_alt = context.rel_alt
             self.start_time = time.time()
@@ -504,7 +457,6 @@ class LandNode(CtrlNode):
     - 遥控器有输入时优先响应遥控器速度，覆盖视觉控制。
     """
 
-    takeoff_enable = True
     wp_enable = True
     land_enable = True
 
@@ -570,6 +522,10 @@ class LandNode(CtrlNode):
         vy = -self.pid_y_controller(x * rel_alt, stamp)
         yaw_rate = -self.pid_yaw_controller(yaw, stamp)
         return vx, vy, vz, yaw_rate
+
+    def exit(self):
+        context = self.context
+        context.do_ws_pub({"type": "event", "event": "disarm"})
 
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
@@ -850,7 +806,14 @@ class Control(CallbackManager, ROSProxy):
         self.controller_name = rospy.get_param(
             "/mavproxy/control/controller_name", None
         )
-        self.control = BaseController.create(self.controller_name)
+
+        def trigger_land():
+            """由外部触发直接进入地面状态"""
+            self.runner.step(NodeType.GROUND)
+
+        self.control = BaseController.create(
+            self.controller_name, trigger_land=trigger_land
+        )
         self.do_send_cmd = self.control.do_send_cmd
         self.pland_enable = self.control.is_pland_enable() and self.pland_enable
 
@@ -874,17 +837,37 @@ class Control(CallbackManager, ROSProxy):
             }
         )
         logger.info("publish done")
-        if self.controller_name == "dog":
-            while True:
-                try:
-                    res = post_json(
-                        "set_param", data=dict(param=dict(DISARM_DELAY=dict(value=0)))
-                    )
-                    if res.json().get("status", None) == "success":
-                        break
-                except:
-                    pass
-                time.sleep(1)
+
+    def set_wp_cb(
+        self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
+    ):
+        if len(waypoint) == 0 and not rtl:
+            raise ValueError("No waypoint found!")
+
+        if (len(waypoint) == 1 and not rtl) or (rtl and len(waypoint) == 0):
+            # 如果只有一个航点(rtl为0个), 本来是不允许的, 现在额外插入一个
+            waypoint.insert(0, [0, 0, 10])
+
+        if self.runner.node.type == NodeType.GROUND:
+            self.takeoff_alt = waypoint[0][-1]
+            next_state = NodeType.TAKING_OFF2
+        else:
+            next_state = NodeType.LIFTING
+
+        # set_wp start
+        logger.info(f"set wp return: {rtl} wp: {waypoint}")
+        self.land = land or rtl
+        self.nodeEventList = nodeEventList
+        if rtl:
+            return_alt = waypoint[-1][-1]  # 最后一个点的高度作为返航高度
+            waypoint.append([self.takeoff_lon, self.takeoff_lat, return_alt])
+        self.waypoint = waypoint[1:]
+        self.wp_idx = 0
+        # set_wp done
+
+        self.set_mode_service(0, "GUIDED")
+        self.do_pub_wp(waypoint[0:1] + self.waypoint, land or rtl)
+        self.runner.step(next_state)
 
     def do_ws_pub(self, data: dict):
         self.ws_pub.publish(json.dumps(data))
@@ -953,8 +936,8 @@ class Control(CallbackManager, ROSProxy):
         return self.control.check_hover(self.arm, self.rel_alt)
 
     def check_alt(self, target: float, threshold: float):
-        return self.control.check_alt(
-            self.rel_alt, self.min_alt_threshold, target, threshold
+        return math.fabs(self.rel_alt - target) < max(
+            target * threshold, self.min_alt_threshold
         )
 
     def check_yaw(self, yaw_enu):
@@ -1346,9 +1329,10 @@ class Control(CallbackManager, ROSProxy):
 
     @http_proxy.post("/set_waypoint")
     def set_waypoint(self, data: SetWaypointModel):
+        if self.runner.node.type == NodeType.INIT:
+            return ERROR_RESPONSE("初始化中!")
         self._wp_raw = copy.deepcopy(data.waypoint)
-        self.runner.trigger(
-            CEventType.SET_WP,
+        self.set_wp_cb(
             waypoint=data.waypoint,
             nodeEventList=data.nodeEventList,
             speed=data.speed,
@@ -1367,25 +1351,27 @@ class Control(CallbackManager, ROSProxy):
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/land")
-    def route_land(self, waypoint=None, speed=None):
-        if waypoint is None or len(waypoint) == 0:
+    def route_land(self, data: SetWaypointModel):
+        if data.waypoint is None or len(data.waypoint) == 0:
             self.runner.trigger(CEventType.SET_LAND)
         else:
-            self.runner.trigger(
-                CEventType.SET_WP, waypoint=waypoint, speed=speed, land=True
-            )
+            data.land = True
+            data.rtl = False
+            return self.set_waypoint(data)
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/return")
-    def route_return(self, waypoint=None, speed=None):
-        if waypoint is None:
-            waypoint = []
-        self.runner.trigger(CEventType.SET_WP, waypoint=waypoint, speed=speed, rtl=True)
-        return SUCCESS_RESPONSE()
+    def route_return(self, data: SetWaypointModel):
+        data.rtl = True
+        data.land = False
+        return self.set_waypoint(data)
 
     @http_proxy.post("/takeoff")
     def takeoff(self, data: TakeoffModel):
-        self.runner.trigger(CEventType.SET_TAKEOFF, alt=data.alt)
+        if self.runner.node.type == NodeType.INIT:
+            return ERROR_RESPONSE("初始化中, 无法起飞!")
+        self.takeoff_alt = data.alt
+        self.runner.step(NodeType.TAKING_OFF)
         return SUCCESS_RESPONSE()
 
     @http_proxy.post("/loiter")
@@ -1443,6 +1429,13 @@ class Control(CallbackManager, ROSProxy):
 
     @http_proxy.get("/prearms")
     def prearm(self):
+        if not self.control.is_prearm_enable():
+            try:
+                self.do_arm()
+                return SUCCESS_RESPONSE(dict(arm=True))
+            except Exception as e:
+                return ERROR_RESPONSE(dict(arm=False, reason=str(e)))
+
         # mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK
         if (
             rospy.get_param("/mavros/param/ARMING_CHECK", 0) == 0

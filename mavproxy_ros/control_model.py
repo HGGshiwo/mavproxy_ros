@@ -1,3 +1,4 @@
+from dataclasses import field
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ class TakeoffModel(BaseModel):
 
 
 class SetWaypointModel(BaseModel):
-    waypoint: List[Any]
+    waypoint: List[Any] = field(default_factory=list)
     nodeEventList: List[Any] = None
     speed: float = None
     land: bool = False

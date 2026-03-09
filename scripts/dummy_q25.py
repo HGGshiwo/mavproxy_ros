@@ -277,35 +277,14 @@ class Q25RobotState:
                     target_vy = data.left_x / 1e3 * MAX_VEL_Y
                     target_yr = data.right_x / 1e3 * MAX_VEL_YAW
 
-                    # 应用加速度限制
-                    current_time = time.time()
-                    dt = current_time - self.last_update_time
-                    if dt <= 0:
-                        dt = 0.05
-
-                    dvx = (target_vx - self.target_vel_x) / dt
-                    dvy = (target_vy - self.target_vel_y) / dt
-                    dyr = (target_yr - self.target_vel_yaw) / dt
-
-                    linear_accel = math.sqrt(dvx**2 + dvy**2)
-                    if linear_accel > MAX_ACCEL:
-                        scale = MAX_ACCEL / linear_accel
-                        self.target_vel_x += dvx * scale * dt
-                        self.target_vel_y += dvy * scale * dt
-                    else:
-                        self.target_vel_x = target_vx
-                        self.target_vel_y = target_vy
-
-                    if abs(dyr) > MAX_ANGULAR_ACCEL:
-                        sign = 1 if dyr > 0 else -1
-                        self.target_vel_yaw += sign * MAX_ANGULAR_ACCEL * dt
-                    else:
-                        self.target_vel_yaw = target_yr
+                    self.target_vel_x = target_vx
+                    self.target_vel_y = target_vy
+                    self.target_vel_yaw = target_yr
 
                     self.vel_x = self.target_vel_x
                     self.vel_y = self.target_vel_y
                     self.vel_yaw = self.target_vel_yaw
-                    self.last_update_time = current_time
+                    # self.last_update_time = current_time
                     return True, None
                 else:
                     rospy.loginfo(f"❓  未知指令：{cmd_type.name}")
@@ -518,7 +497,7 @@ class Q25UDPServer:
                     "/robot_state", String, queue_size=10
                 )
                 self.pub_cmd_vel = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
-                rospy.Subscriber("/current_state", String, self.current_state_callback)
+                # rospy.Subscriber("/current_state", String, self.current_state_callback)
                 rospy.loginfo(
                     "ROS publishers initialized: /robot_state, /cmd_vel, /current_state"
                 )
@@ -574,9 +553,9 @@ class Q25UDPServer:
                 rospy.loginfo(f"❌  上报{cmd_enum.name}失败：{str(e)}")
             time.sleep(interval)
 
-    def current_state_callback(self, msg):
-        """接收unitree_guide发布的当前状态，用于上报"""
-        self._current_state = msg.data
+    # def current_state_callback(self, msg):
+    #     """接收unitree_guide发布的当前状态，用于上报"""
+    #     self._current_state = msg.data
 
     def get_current_state_int(self) -> int:
         """将当前状态字符串转换为int值"""
@@ -607,7 +586,7 @@ class Q25UDPServer:
                     twist.linear.z = 0.0
                     twist.angular.x = 0.0
                     twist.angular.y = 0.0
-                    twist.angular.z = self.robot_state.vel_yaw
+                    twist.angular.z = -self.robot_state.vel_yaw
                 else:
                     twist.linear.x = 0.0
                     twist.linear.y = 0.0
@@ -661,6 +640,7 @@ class Q25UDPServer:
 
         if success and ros_loaded and self.pub_robot_state is not None and cmd_info:
             self.pub_robot_state.publish(String(data=cmd_info))
+            print(f"set state: {cmd_info}")
             self._current_state = cmd_info
 
         # 生成响应

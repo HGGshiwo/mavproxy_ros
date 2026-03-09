@@ -1,6 +1,6 @@
 import math
 from logging import getLogger
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import rospy
@@ -15,7 +15,9 @@ logger = getLogger(__name__)
 
 
 class DroneController(BaseController):
-    def __init__(self):
+    def __init__(self, trigger_land: Callable):
+        super().__init__(trigger_land)
+
         self.setpoint_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
         )
@@ -26,10 +28,8 @@ class DroneController(BaseController):
         """判断是否处于悬停状态"""
         return arm == True and rel_alt >= HOVER_THRESHOLD
 
-    def check_alt(
-        self, rel_alt: float, min_alt_threshold: float, target: float, threshold: float
-    ):
-        return math.fabs(rel_alt - target) < max(target * threshold, min_alt_threshold)
+    def is_alt_enable(self):
+        return True
 
     def do_takeoff(self, alt: float):
         response = self.takeoff_srv(

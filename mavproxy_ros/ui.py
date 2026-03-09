@@ -1,5 +1,3 @@
-from turtle import title
-
 from event_callback.components.http.ui_config import (
     CopyConfig,
     FormConfig,

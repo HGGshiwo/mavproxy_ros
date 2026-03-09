@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 _controller_map = {}
 
@@ -9,8 +9,19 @@ class BaseController:
         _controller_map[name] = cls
         return super().__init_subclass__()
 
+    def __init__(self, trigger_land: Callable):
+        self.trigger_land = trigger_land
+
+    def is_alt_enable(self):
+        """是否允许高度控制"""
+        return True
+
     def is_pland_enable(self):
         """该模式下是否允许精准降落"""
+        return True
+
+    def is_prearm_enable(self):
+        """是否进行Prearm检查, 还是用arm代替"""
         return True
 
     @staticmethod
@@ -19,7 +30,6 @@ class BaseController:
             raise ValueError(
                 f"Unsupport controller name: {name}, must in {','.join(_controller_map.keys())}!"
             )
-
         return _controller_map[name](*args, **kwargs)
 
     def state_change(self, old_state: Any, new_state: Any):

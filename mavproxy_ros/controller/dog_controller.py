@@ -5,7 +5,7 @@ import struct
 import threading
 import time
 from logging import getLogger
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import rospy
@@ -62,7 +62,7 @@ port = 9112
 
 
 class DogController(CallbackManager, BaseController):
-    def __init__(self):
+    def __init__(self, trigger_land: Callable):
         # 组件配置
         config = [
             SocketServerConfig(
@@ -90,13 +90,14 @@ class DogController(CallbackManager, BaseController):
         self.is_run = None
         self.paltform_height = None
         self.max_accel = 1.0
-        self.max_yaw_accel = 0.2
+        self.max_yaw_accel = 1.0
         self._last_vx = 0.0
         self._last_vy = 0.0
         self._last_yaw_rate = 0.0
         self._last_cmd_time = None
         self._accel_lock = threading.Lock()
         CallbackManager.__init__(self, config)
+        BaseController.__init__(self, trigger_land)
         # 订阅 ENU odom，用于位置控制
         self._odom: Optional[Odometry] = None
         self._odom_lock = threading.Lock()
@@ -119,16 +120,13 @@ class DogController(CallbackManager, BaseController):
         """该模式下是否允许精准降落"""
         return False
 
-    def _post_init(self):
-        # 对于狗，禁止自动上锁
-        post_json("/set_param", data=dict(param=dict(DISARM_DELAY=dict(value=0))))
-
     def do_takeoff(self, alt: float):
         """起立"""
         data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
         socketc.send_to_server(self, data)
 
     def do_land(self):
+        self.loiter()
         data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
         socketc.send_to_server(self, data)
 
@@ -182,6 +180,7 @@ class DogController(CallbackManager, BaseController):
         :param max_vel: 线速度满量程（m/s），用于缩放 vx/vy
         :param max_yaw_rate: 偏航角速度满量程（rad/s），独立缩放 yaw_rate
         """
+        yaw_rate = -yaw_rate  # yaw_rate是反的？实际是顺时针为正？？？
         vel_scale = 1000.0 / max(max_vel, 1e-6)
         yaw_scale = 1000.0 / max(max_yaw_rate, 1e-6)
         left_x = int(max(-1000, min(1000, vx_body * vel_scale)))
@@ -211,7 +210,7 @@ class DogController(CallbackManager, BaseController):
           "body" — 机体坐标系下: x为前, y为左, z为下
         """
         resolved_frame: str = frame if frame is not None else "enu"
-        print(p, v, a, frame)
+        logger.info(f"do_send_cmd: p={p}, v={v}, a={a}, frame={frame}")
         if v is not None:
             self._stop_position_control()
             self._send_velocity_cmd(v, yaw_rate, resolved_frame)
@@ -377,9 +376,9 @@ class DogController(CallbackManager, BaseController):
                 )
             )
 
-            # 距离小于4m, 使用二次函数调整
-            if dist < 4:
-                dist = dist * dist / 16
+            # 距离小于2m, 使用二次函数调整
+            if dist < 2:
+                dist = dist * dist / 4
             vx_body = min(KP * dist, MAX_VEL) * max(0.0, scale)
             vy_body = 0.0
 
@@ -396,6 +395,8 @@ class DogController(CallbackManager, BaseController):
             )
             self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
             time.sleep(dt)
+
+        self.move_axis_no_dead_zone(0, 0, 0, 0)
         logger.info("位置控制线程退出")
 
     @staticmethod
@@ -455,9 +456,12 @@ class DogController(CallbackManager, BaseController):
 
             return vx_limited, vy_limited, yaw_rate_limited
 
-    def check_alt(self, *args, **kwargs):
-        """检查是否到达了指定的高度，这里简化为检测是否是站立状态"""
-        return self.basic_state in [1, 2, 3, 4, 0x10]
+    def is_alt_enable(self):
+        return False
+
+    def is_prearm_enable(self):
+        """是否进行Prearm检查, 还是用arm代替"""
+        return False
 
     def check_hover(self, *args, **kwargs):
         return self.basic_state in [1, 2, 3, 4, 0x10]
@@ -572,6 +576,10 @@ class DogController(CallbackManager, BaseController):
         basic_state_desc = state_map.get(
             data_obj.basic_state, f"未知状态({data_obj.basic_state})"
         )
+        if self.basic_state is not None and (
+            data_obj.basic_state == 0 and self.basic_state != 0
+        ):
+            self.trigger_land()
         self.basic_state = data_obj.basic_state
         self.is_run = data_obj.gait_state == 0x23
         # http_proxy.ws_send(
@@ -628,58 +636,6 @@ class DogController(CallbackManager, BaseController):
             error = ", ".join(error)
             self.wsproxy.error(error)
 
-    # @sockets.recv(CommandType.SENSOR_DATA_REPORT, frequency=10)
-    # def sensor_data_report(self, data: bytes):
-    #     """接收运动控制传感器数据（200Hz）"""
-    #     _, data_obj = unpack_q25_udp_cmd(data)
-    #     if not isinstance(data_obj, ControllerSensorData):
-    #         return
-    #     imu = data_obj.imu_data
-    #     json_data = {
-    #         "imu": {
-    #             "timestamp": imu.timestamp,
-    #             "angle": [round(imu.roll, 2), round(imu.pitch, 2), round(imu.yaw, 2)],
-    #             "angular_vel": [
-    #                 round(imu.omega_x, 3), round(imu.omega_y, 3), round(imu.omega_z, 3)
-    #             ],
-    #             "acceleration": [
-    #                 round(imu.acc_x, 3), round(imu.acc_y, 3), round(imu.acc_z, 3)
-    #             ],
-    #         },
-    #         "joint_pos": self._format_joint_data(data_obj.joint_pos),
-    #         "joint_vel": self._format_joint_data(data_obj.joint_vel),
-    #         "joint_torque": self._format_joint_data(data_obj.joint_tau),
-    #     }
-    # http_proxy.ws_send(self, json_data, MessageType.STATE)
-    # @sockets.recv(CommandType.CONTROLLER_SAFE_DATA_REPORT, frequency=1)
-    # def controller_safe_report(self, data: bytes):
-    #     """接收运动控制系统数据（1Hz）"""
-    #     _, data_obj = unpack_q25_udp_cmd(data)
-    #     if not isinstance(data_obj, ControllerSafeData):
-    #         return
-    #     json_data = {
-    #         "motor_temperatures": [
-    #             round(temp, 1) for temp in data_obj.motor_temperatures
-    #         ],
-    #         "driver_temperatures": data_obj.driver_temperatures,
-    #         "cpu": {
-    #             "temperature": round(data_obj.cpu_info.temperature, 1),
-    #             "frequency": round(data_obj.cpu_info.frequency, 0),
-    #         },
-    #     }
-    #     http_proxy.ws_send(self, json_data, MessageType.STATE)
-    # @sockets.recv(CommandType.BATTERY_CHARGE_STATE_REPORT, frequency=10)
-    # def battery_charge_report(self, data: bytes):
-    #     """接收电池充电状态数据（0.5Hz）"""
-    #     _, data_obj = unpack_q25_udp_cmd(data)
-    #     if not isinstance(data_obj, BatteryChargeState):
-    #         return
-    #     json_data = {
-    #         "level": data_obj.level,
-    #         "is_charging": data_obj.is_charging,
-    #         "charge_desc": "充电中" if data_obj.is_charging else "未充电",
-    #     }
-    #     http_proxy.ws_send(self, json_data, MessageType.STATE)
     @sockets.recv(CommandType.ERROR_CODE_REPORT, frequency=10)
     def error_code_report(self, data: bytes):
         """接收错误码数据"""
