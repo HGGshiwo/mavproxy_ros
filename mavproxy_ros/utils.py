@@ -1,7 +1,9 @@
 import time
 from typing import Dict, Optional
-
 import requests
+from concurrent.futures import ThreadPoolExecutor
+
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 def SUCCESS_RESPONSE(msg="OK"):
@@ -53,12 +55,15 @@ def post_json(
         data = {}
     if verbose:
         print(f"post url: {url} data: {data}")
-    try:
-        res = requests.post(f"http://localhost:8000/{url}", json=data, timeout=timeout)
-        if verbose:
-            print(f"post res: {res.json()}")
-        return res
 
-    except Exception as e:
-        print(f"post res: {e}")
-    return None
+    def _post():
+        try:
+            res = requests.post(f"http://localhost:8000/{url}", json=data, timeout=timeout)
+            if verbose:
+                print(f"post res: {res.json()}")
+            return res
+        except Exception as e:
+            print(f"post res: {e}")
+            return None
+
+    return _executor.submit(_post)

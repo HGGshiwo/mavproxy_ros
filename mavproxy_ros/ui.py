@@ -25,7 +25,10 @@ StatusConfig("planner", "避障状态")
 StatusConfig("version", "version")
 StatusConfig("pland", "精准降落状态")
 StatusConfig(config_id="basic_state", name="基本状态")
+StatusConfig("battery_level", "电量")
 StatusConfig("yaw_diff", "偏航误差", collapse=True)
+StatusConfig("yr", "期望角速", collapse=True)
+StatusConfig("vx", "期望速度", collapse=True)
 StatusConfig("alt_diff", "高度误差", collapse=True)
 StatusConfig("wp_idx", "当前航点", collapse=True)
 StatusConfig("follow x", "跟随速度X", collapse=True)
@@ -52,8 +55,12 @@ PrimaryButtonConfig(
 PrimaryButtonConfig(name="返航", target=ToastConfig(url="/return", method="POST"))
 PrimaryButtonConfig(
     name="降落",
-    target=ToastConfig(url="/set_mode", method="POST", data=dict(mode="LAND")),
+    target=ToastConfig(url="/land", method="POST"),
 )
+# PrimaryButtonConfig(
+#     name="降落",
+#     target=ToastConfig(url="/set_mode", method="POST", data=dict(mode="LAND")),
+# )
 PrimaryButtonConfig(name="精准降落", target=ToastConfig(url="/land", method="POST"))
 PrimaryButtonConfig(
     name="重启飞控", target=ToastConfig(url="/reboot_fcu", method="POST")

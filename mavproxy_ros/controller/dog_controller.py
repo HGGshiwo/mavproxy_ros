@@ -25,8 +25,6 @@ from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
-from mavproxy_ros.utils import post_json
-
 from .base_controller import BaseController
 from .dog_utils import *
 
@@ -46,19 +44,20 @@ def router(data: bytes):
 
 
 # host = "192.168.3.20"  # 实际机器人IP（无线接入）
-# port = 43893
-# server_port = 43893
-# server_host = "0.0.0.0"
+host = "192.168.1.103"
+port = 43893
+server_port = 43893
+server_host = "0.0.0.0"
 
 # host = "192.168.1.103"  # 有线接入IP
 # host = "192.168.2.103"  # 通讯接口IP
 # server_host = "192.168.3.157"
 
 # 测试使用
-server_host = "0.0.0.0"
-server_port = 9111
-host = "localhost"
-port = 9112
+# server_host = "0.0.0.0"
+# server_port = 9111
+# host = "localhost"
+# port = 9112
 
 
 class DogController(CallbackManager, BaseController):
@@ -108,7 +107,7 @@ class DogController(CallbackManager, BaseController):
         self._pos_ctrl_thread: Optional[threading.Thread] = None
         self._pos_ctrl_stop = threading.Event()
         self._pos_ctrl_lock = threading.Lock()
-
+        
         self.wsproxy = ros.create_wsproxy()
         heartbeat_t = threading.Thread(
             target=self.heartbeat_thread, daemon=True, name="heartbeat-thread"
@@ -132,7 +131,7 @@ class DogController(CallbackManager, BaseController):
 
     def loiter(self):
         self._stop_position_control()
-        for i in range(10):
+        for i in range(20): # 发送2s的停止指令，防止还有速度，可能需要更加优雅的实现
             self._send_velocity_cmd([0, 0, 0], None, frame="body")
             time.sleep(0.1)
 
@@ -383,7 +382,7 @@ class DogController(CallbackManager, BaseController):
             vy_body = 0.0
 
             vx_body, vy_body, yr = self._limit_acceleration(vx_body, vy_body, yr)
-
+            self.wsproxy.state(dict(yaw_diff=f"{compute_yaw_rate.prev_yaw_err:.2f}", yr=f"{yr:.2f}", vx=f"{vx_body:.2f}"))
             logger.error(
                 f"dis_err={dist:.2f} dir={target_direction:.2f} cur_yaw={cur_yaw:.2f} err={compute_yaw_rate.prev_yaw_err:.2f} yr={yr:.2f} vx={vx_body:.2f}"
             )
@@ -576,9 +575,8 @@ class DogController(CallbackManager, BaseController):
         basic_state_desc = state_map.get(
             data_obj.basic_state, f"未知状态({data_obj.basic_state})"
         )
-        if self.basic_state is not None and (
-            data_obj.basic_state == 0 and self.basic_state != 0
-        ):
+        if data_obj.basic_state == 0 and self.basic_state != 0:
+            """防止在发布了起飞后，但是还没有响应的情况下出发"""
             self.trigger_land()
         self.basic_state = data_obj.basic_state
         self.is_run = data_obj.gait_state == 0x23

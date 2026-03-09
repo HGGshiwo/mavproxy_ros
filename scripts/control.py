@@ -223,9 +223,14 @@ class TakeoffNode(CtrlNode):
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
-        if context.check_alt(context.takeoff_alt, TAKEOFF_THRESHOLD):
-            context.do_pub_takeoff()
-            self.step(NodeType.HOVER)
+        if context.control.is_alt_enable():
+            if not context.check_alt(context.takeoff_alt, TAKEOFF_THRESHOLD):
+                return
+        else:
+            if not context.check_hover():  # 只检查是否悬停
+                return
+        context.do_pub_takeoff()
+        self.step(NodeType.HOVER)
 
 
 class Takeoff2Node(CtrlNode):
@@ -248,11 +253,15 @@ class Takeoff2Node(CtrlNode):
     @CtrlNode.on(CEventType.IDLE)
     def idle_cb(self):
         context = self.context
-        if not context.control.is_alt_enable() or context.check_alt(
-            context.takeoff_alt, TAKEOFF_THRESHOLD
-        ):
-            context.do_pub_takeoff()
-            self.step(NodeType.LIFTING)
+        if context.control.is_alt_enable():
+            if not context.check_alt(context.takeoff_alt, TAKEOFF_THRESHOLD):
+                return
+        else:
+            if not context.check_hover():  # 只检查是否悬停
+                return
+
+        context.do_pub_takeoff()
+        self.step(NodeType.LIFTING)
 
 
 class HoverNode(CtrlNode):
@@ -533,7 +542,10 @@ class LandNode(CtrlNode):
         if not context.pland_enable:
             return
 
-        if context.rangefinder_alt < PLAND_ALT_THRESHOLD:
+        if (
+            not context.control.is_alt_enable()
+            or context.rangefinder_alt < PLAND_ALT_THRESHOLD
+        ):
             context.control.do_land()
             logger.info(f"land done, alt: {context.rangefinder_alt}")
             self.step(NodeType.GROUND)
@@ -809,6 +821,9 @@ class Control(CallbackManager, ROSProxy):
 
         def trigger_land():
             """由外部触发直接进入地面状态"""
+            if self.runner.node.type == NodeType.GROUND:
+                return
+            logger.error("trigger land")
             self.runner.step(NodeType.GROUND)
 
         self.control = BaseController.create(
@@ -874,7 +889,9 @@ class Control(CallbackManager, ROSProxy):
 
     def step_cb(self, prev, cur):
         self.ws_pub.publish(json.dumps({"type": "state", "state": cur.value}))
-        self.control.state_change(prev, cur)
+        logger.info(f"STATE: {prev} -> {cur}")
+        if hasattr(self, "control"):
+            self.control.state_change(prev, cur)
 
     def enu_xy2yaw(self, diff_x, diff_y):
         """注意, yaw正东为0度,逆时针为正!"""

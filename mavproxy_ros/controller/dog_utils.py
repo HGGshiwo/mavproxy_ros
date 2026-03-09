@@ -28,8 +28,8 @@ class YawController:
             yaw_rate: FLU
         """
         YAW_DEADBAND = 0.05  # yaw 死区 (rad ≈ 3°)，消除零点附近高频抖动
-        KP_YAW = 0.6  # yaw 比例增益，偏低以减少振荡
-        YAW_LPF_ALPHA = 0.4  # yaw 输出一阶低通滤波系数（越小越平滑）
+        KP_YAW = 1.0 # yaw 比例增益，偏低以减少振荡
+        YAW_LPF_ALPHA = 0.6  # yaw 输出一阶低通滤波系数（越小越平滑）
 
         # 计算 yaw 误差（归一化到 [-π, π]，并做帧间展开防跨界跳变）
         yaw_err = math.atan2(
