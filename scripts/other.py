@@ -39,6 +39,7 @@ class Other(CallbackManager):
         }
         self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
 
+
     # fmt: on
     @ros.topic("/mavros/sys_status", SysStatus)
     def sys_status_cb(self, msg: SysStatus):

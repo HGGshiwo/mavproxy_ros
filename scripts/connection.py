@@ -52,6 +52,7 @@ class Connection(CallbackManager):
         resp = set_rate(req)
         logger.info("set stream done")
 
+
     # print_logger_info()
     @ros.topic("/mavros/state", State)
     def mode_cb(self, data: State):
@@ -63,7 +64,7 @@ class Connection(CallbackManager):
         arm_desc = "已解锁" if data.armed else "未解锁"
         connected_desc = "已连接" if data.connected else "未连接"
         self._publish_state(
-            dict(mode=data.mode, arm=arm_desc, connected=connected_desc)
+            dict(mode=data.mode, arm=data.armed, connected=data.connected)
         )
         self.armed = data.armed
 

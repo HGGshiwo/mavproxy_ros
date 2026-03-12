@@ -15,9 +15,9 @@ logger = getLogger(__name__)
 
 
 class DroneController(BaseController):
+
     def __init__(self, trigger_land: Callable):
         super().__init__(trigger_land)
-
         self.setpoint_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=1
         )
@@ -47,14 +47,15 @@ class DroneController(BaseController):
         self.set_mode_service(0, "LOITER")
 
     def check_arrive(
-        self,
-        cur_pos: Tuple[float, float, float],
-        goal: Tuple[float, float, float],
+        self, cur_pos: Tuple[float, float, float], goal: Tuple[float, float, float]
     ):
         dis = np.sqrt(
-            (cur_pos[0] - goal[0]) ** 2
-            + (cur_pos[1] - goal[1]) ** 2
-            + (cur_pos[2] - goal[2]) ** 2
+            (cur_pos[0] - goal[0]) **
+            2 +
+            (cur_pos[1] - goal[1]) **
+            2 +
+            (cur_pos[2] - goal[2]) **
+            2
         )
         return dis
 

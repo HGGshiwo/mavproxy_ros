@@ -28,29 +28,25 @@ class YawController:
             yaw_rate: FLU
         """
         YAW_DEADBAND = 0.05  # yaw 死区 (rad ≈ 3°)，消除零点附近高频抖动
-        KP_YAW = 1.0 # yaw 比例增益，偏低以减少振荡
+        KP_YAW = 1.0  # yaw 比例增益，偏低以减少振荡
         YAW_LPF_ALPHA = 0.6  # yaw 输出一阶低通滤波系数（越小越平滑）
-
         # 计算 yaw 误差（归一化到 [-π, π]，并做帧间展开防跨界跳变）
         yaw_err = math.atan2(
-            math.sin(target_direction - cur_yaw),
-            math.cos(target_direction - cur_yaw),
+            math.sin(target_direction - cur_yaw), math.cos(target_direction - cur_yaw)
         )
         if self.prev_yaw_err is not None:
             delta = yaw_err - self.prev_yaw_err
             if delta > math.pi:
                 yaw_err -= 2 * math.pi
-            elif delta < -math.pi:
+            elif delta < - math.pi:
                 yaw_err += 2 * math.pi
         self.prev_yaw_err = yaw_err
-
         # 死区 + 比例控制，死区内归零避免零点附近反复振荡
         if abs(yaw_err) < YAW_DEADBAND:
             yr_raw = 0.0
         else:
             # yr是FLU坐标系, 因为都是逆时针，所以和yaw的ENU坐标系一致
             yr_raw = max(-1.0, min(1.0, yaw_err * KP_YAW))
-
         # 一阶低通滤波（EMA），平滑 yaw rate 输出，减少符号反转引起的抖动
         self.yr_filtered = (
             YAW_LPF_ALPHA * yr_raw + (1.0 - YAW_LPF_ALPHA) * self.yr_filtered
@@ -69,11 +65,12 @@ def to_int32(data):
     return ctypes.c_int32(data).value
 
 
+
+
 # -------------------------- 核心枚举（控制指令+状态上报指令） --------------------------
 @unique
 class CommandType(IntEnum):
     """天狼Q25机器人指令枚举（控制指令+状态上报指令）"""
-
     # 控制指令（新增无死区轴指令）
     MANUAL_HEARTBEAT = 0x21040001
     ENTER_L_MODE = 0x21010220
@@ -154,6 +151,7 @@ command_info_map: Dict[
 # -------------------------- 数据结构类 --------------------------
 @dataclass
 class BaseCommand:
+
     @classproperty
     def fmt_size(cls) -> int:
         return struct.calcsize(cls.fmt)
@@ -162,7 +160,6 @@ class BaseCommand:
 @dataclass
 class CommandHead:
     """指令头部（12字节）"""
-
     fmt = "<III"  # 公共打包格式
     command_id: int  # uint32_t
     parameter_size: int  # uint32_t
@@ -187,7 +184,6 @@ class CommandHead:
 @dataclass
 class FireAim:
     """对准指令数据（12字节）"""
-
     fmt = "<III"  # 公共打包格式
     roll: int  # uint32_t（无效字段）
     pitch: int  # uint32_t（[-10°,17°]对应[1000,1000]）
@@ -208,7 +204,6 @@ class FireAim:
 @dataclass
 class AxisCommand:
     """无死区轴指令数据（16字节，新增）"""
-
     fmt = "<iiii"  # 公共打包格式
     left_x: int  # uint32_t（X轴速度，[-1000,1000]）
     left_y: int  # uint32_t（Y轴速度，[-1000,1000]）
@@ -234,7 +229,6 @@ class AxisCommand:
 @dataclass
 class ImuSensorData(BaseCommand):
     """IMU传感器数据（40字节）"""
-
     fmt = "<i9f"  # 公共打包格式
     timestamp: int  # int32_t
     roll: float  # 翻滚角（°）
@@ -285,7 +279,6 @@ class ImuSensorData(BaseCommand):
 @dataclass
 class LegJointData(BaseCommand):
     """关节数据（48字节）"""
-
     fmt = "<12f"  # 公共打包格式
     # 左前腿
     fl_hipx: float  # 侧摆关节
@@ -346,7 +339,6 @@ class LegJointData(BaseCommand):
 @dataclass
 class CpuInfo:
     """CPU状态数据（8字节）"""
-
     fmt = "<ff"  # 公共打包格式
     temperature: float  # 温度（℃）
     frequency: float  # 主频（MHz）
@@ -363,11 +355,12 @@ class CpuInfo:
         return cls(temperature=temp, frequency=freq)
 
 
+
+
 # -------------------------- 状态上报核心数据类 --------------------------
 @dataclass
 class RcsData:
     """运行状态数据（76字节）"""
-
     fmt = "<15siiqqqqffff10BI"  # 公共打包格式
     robot_name: str  # char[15]
     current_milege: int  # 本次运行里程（cm，int32_t）
@@ -412,7 +405,7 @@ class RcsData:
             self.joystick_rx,
             self.joystick_ry,
             self.is_nav_mode,
-            *[0] * 9,
+            * [0] * 9,
             error_bits,
         )
 
@@ -447,7 +440,6 @@ class RcsData:
 @dataclass
 class MotionStateData:
     """运动状态数据（56字节）"""
-
     fmt = "<2Bff3f3ffII10B"  # 公共打包格式
     # basic_state取值：0=趴下,1=起立中,2=初始站立,3=力控站立,4=踏步,5=趴下中,6=急停/摔倒,0x10=L模式
     basic_state: int
@@ -517,7 +509,6 @@ class MotionStateData:
 @dataclass
 class ControllerSensorData:
     """运动控制传感器数据（184字节）"""
-
     imu_data: ImuSensorData
     joint_pos: LegJointData
     joint_vel: LegJointData
@@ -525,10 +516,10 @@ class ControllerSensorData:
 
     def to_bytes(self) -> bytes:
         return (
-            self.imu_data.to_bytes()
-            + self.joint_pos.to_bytes()
-            + self.joint_vel.to_bytes()
-            + self.joint_tau.to_bytes()
+            self.imu_data.to_bytes() +
+            self.joint_pos.to_bytes() +
+            self.joint_vel.to_bytes() +
+            self.joint_tau.to_bytes()
         )
 
     @classmethod
@@ -539,19 +530,18 @@ class ControllerSensorData:
 
         imu = ImuSensorData.from_bytes(data[: ImuSensorData.fmt_size])
         joint_pos = LegJointData.from_bytes(
-            data[
-                ImuSensorData.fmt_size : ImuSensorData.fmt_size + LegJointData.fmt_size
-            ]
+            data[ImuSensorData.fmt_size: ImuSensorData.fmt_size + LegJointData.fmt_size]
         )
         joint_vel = LegJointData.from_bytes(
             data[
-                ImuSensorData.fmt_size
-                + LegJointData.fmt_size : ImuSensorData.fmt_size
-                + LegJointData.fmt_size * 2
+                ImuSensorData.fmt_size +
+                LegJointData.fmt_size: ImuSensorData.fmt_size +
+                LegJointData.fmt_size *
+                2
             ]
         )
         joint_tau = LegJointData.from_bytes(
-            data[ImuSensorData.fmt_size + LegJointData.fmt_size * 2 : total_size]
+            data[ImuSensorData.fmt_size + LegJointData.fmt_size * 2:total_size]
         )
         return cls(
             imu_data=imu, joint_pos=joint_pos, joint_vel=joint_vel, joint_tau=joint_tau
@@ -567,7 +557,6 @@ class ControllerSensorData:
 @dataclass
 class ControllerSafeData:
     """运动控制系统数据（68字节，原Q20ControllerSafeData重命名）"""
-
     fmt = "<12f12Bff"  # 公共打包格式
     motor_temperatures: List[float]  # 12个电机温度（℃）
     driver_temperatures: List[int]  # 12个驱动器温度（℃，uint8_t）
@@ -579,8 +568,8 @@ class ControllerSafeData:
 
         return struct.pack(
             self.fmt,
-            *self.motor_temperatures,
-            *self.driver_temperatures,
+            * self.motor_temperatures,
+            * self.driver_temperatures,
             self.cpu_info.temperature,
             self.cpu_info.frequency,
         )
@@ -601,7 +590,6 @@ class ControllerSafeData:
 @dataclass
 class BatteryLevel:
     """电池电量状态（12字节）"""
-
     level: int  # 电量（%）
 
     def to_bytes(self) -> bytes:
@@ -620,7 +608,6 @@ class BatteryLevel:
 @dataclass
 class BatteryChargeState:
     """电池充电状态（12字节）"""
-
     level: int  # 电量（%，高24位）
     is_charging: bool  # 低8位：0=未充电，1=充电中
 
@@ -643,7 +630,6 @@ class BatteryChargeState:
 @dataclass
 class ErrorCode:
     """错误码（12字节）"""
-
     error_level: int  # 0=通知，1=警告，2=错误（低8位）
     error_code: int  # 具体错误码（高24位）
     error_msg: str  # 错误描述
@@ -697,9 +683,7 @@ def pack_q25_udp_cmd(
 
         data_type = type(data)
         if data_type not in _DATA_TYPE_TO_COMMAND:
-            raise ValueError(
-                f"仅支持FireAim/AxisCommand类型自动匹配，当前为{data_type}"
-            )
+            raise ValueError(f"仅支持FireAim/AxisCommand类型自动匹配，当前为{data_type}")
 
         command_type = _DATA_TYPE_TO_COMMAND[data_type]
     if command_type not in command_info_map:
@@ -758,7 +742,7 @@ def unpack_q25_udp_cmd(data: bytes) -> Tuple[CommandHead, Optional[Any]]:
         raise ValueError(f"未定义指令码：0x{head.command_id:08X}")
 
     cmd_name, cmd_type, url = command_info_map[command_type]
-    data_body = data[12 : 12 + head.parameter_size]
+    data_body = data[12: 12 + head.parameter_size]
     # 解码数据体
     if cmd_type == 0:
         if command_type == CommandType.BATTERY_LEVEL_REPORT:
@@ -802,6 +786,7 @@ def unpack_q25_udp_cmd(data: bytes) -> Tuple[CommandHead, Optional[Any]]:
 def speed_to_cmd_value(axis_type: str, speed: float, v_max: float = None) -> int:
     if axis_type not in ["x", "y", "yaw"]:
         raise ValueError(f"仅支持'x'/'y'/'yaw'，当前输入：{axis_type}")
+
     # X轴速度 → 左摇杆Y轴指令值
     if axis_type == "x":
         if speed > 0:
@@ -813,9 +798,9 @@ def speed_to_cmd_value(axis_type: str, speed: float, v_max: float = None) -> int
     # Y轴速度 → 左摇杆X轴指令值
     elif axis_type == "y":
         if speed > 0:
-            cmd_value = -((speed / v_max) * 8554 + 24576)
+            cmd_value = - ((speed / v_max) * 8554 + 24576)
         elif speed < 0:
-            cmd_value = -((speed / v_max) * 8554 - 24576)
+            cmd_value = - ((speed / v_max) * 8554 - 24576)
         else:
             cmd_value = 0
     # Yaw角速度 → 右摇杆X轴指令值

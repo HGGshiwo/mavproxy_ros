@@ -103,10 +103,10 @@ class HTTPVideoBuilder(VideoBuilder):
                     frame = frame.tobytes()
                     yield (
                         b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n"
-                        + f"Content-Length: {len(frame)}\r\n\r\n".encode()
-                        + frame
-                        + b"\r\n"
+                        b"Content-Type: image/jpeg\r\n" +
+                        f"Content-Length: {len(frame)}\r\n\r\n".encode() +
+                        frame +
+                        b"\r\n"
                     )
 
             finally:

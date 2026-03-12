@@ -1,7 +1,8 @@
 import time
-from typing import Dict, Optional
-import requests
 from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Optional
+
+import requests
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
@@ -16,7 +17,7 @@ def ERROR_RESPONSE(msg):
 
 class FPSHelper:
 
-    def __init__(self, fps=-1, ps_cb=None):
+    def __init__(self, fps= -1, ps_cb=None):
         self.target_fps = fps
         self.start = time.time()
         self.cnt_start = time.time()
@@ -58,10 +59,13 @@ def post_json(
 
     def _post():
         try:
-            res = requests.post(f"http://localhost:8000/{url}", json=data, timeout=timeout)
+            res = requests.post(
+                f"http://localhost:8000/{url}", json=data, timeout=timeout
+            )
             if verbose:
                 print(f"post res: {res.json()}")
             return res
+
         except Exception as e:
             print(f"post res: {e}")
             return None

@@ -4,6 +4,7 @@ _controller_map = {}
 
 
 class BaseController:
+
     def __init_subclass__(cls):
         name = cls.__name__.lower().replace("controller", "")
         _controller_map[name] = cls
@@ -30,6 +31,7 @@ class BaseController:
             raise ValueError(
                 f"Unsupport controller name: {name}, must in {','.join(_controller_map.keys())}!"
             )
+
         return _controller_map[name](*args, **kwargs)
 
     def state_change(self, old_state: Any, new_state: Any):

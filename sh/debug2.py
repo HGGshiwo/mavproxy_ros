@@ -15,10 +15,7 @@ def cmd_vel_callback(msg):
 def odom_callback(msg):
     orientation_q = msg.pose.pose.orientation
     orientation_list = [
-        orientation_q.x,
-        orientation_q.y,
-        orientation_q.z,
-        orientation_q.w,
+        orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w
     ]
     roll, pitch, yaw = euler_from_quaternion(orientation_list)
     rospy.loginfo("ENU yaw=%.4f rad" % (yaw))

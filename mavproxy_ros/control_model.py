@@ -4,6 +4,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel
 
 
+class JoystickModel(BaseModel):
+    left_x: float = 0
+    left_y: float = 0
+    right_x: float = 0
+    right_y: float = 0
+
+
 class SetModeModel(BaseModel):
     mode: str
 
@@ -29,6 +36,8 @@ class SetPosVelModel(BaseModel):
     timeout: Optional[float] = 2  # 接口超时时间
 
 
+
+
 # Other
 class StartRecordModel(BaseModel):
     bag_name: str
@@ -51,6 +60,8 @@ class SetExposureModel(BaseModel):
 
 class StartDetectModel(BaseModel):
     type: str = "smoke"
+
+
 
 
 # Param

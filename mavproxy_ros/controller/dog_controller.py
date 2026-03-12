@@ -15,10 +15,7 @@ from event_callback import CallbackManager, HTTP_ProxyConfig, http_proxy
 from event_callback.components.http.message_handler import MessageType
 from event_callback.components.ros import ros
 from event_callback.components.socket import (
-    SocketClientConfig,
-    SocketServerConfig,
-    socketc,
-    sockets,
+    SocketClientConfig, SocketServerConfig, socketc, sockets
 )
 from event_callback.utils import setup_logger
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
@@ -49,18 +46,17 @@ port = 43893
 server_port = 43893
 server_host = "0.0.0.0"
 
+
 # host = "192.168.1.103"  # 有线接入IP
 # host = "192.168.2.103"  # 通讯接口IP
 # server_host = "192.168.3.157"
-
 # 测试使用
 # server_host = "0.0.0.0"
 # server_port = 9111
 # host = "localhost"
 # port = 9112
-
-
 class DogController(CallbackManager, BaseController):
+
     def __init__(self, trigger_land: Callable):
         # 组件配置
         config = [
@@ -107,7 +103,6 @@ class DogController(CallbackManager, BaseController):
         self._pos_ctrl_thread: Optional[threading.Thread] = None
         self._pos_ctrl_stop = threading.Event()
         self._pos_ctrl_lock = threading.Lock()
-        
         self.wsproxy = ros.create_wsproxy()
         heartbeat_t = threading.Thread(
             target=self.heartbeat_thread, daemon=True, name="heartbeat-thread"
@@ -131,14 +126,12 @@ class DogController(CallbackManager, BaseController):
 
     def loiter(self):
         self._stop_position_control()
-        for i in range(20): # 发送2s的停止指令，防止还有速度，可能需要更加优雅的实现
+        for i in range(20):  # 发送2s的停止指令，防止还有速度，可能需要更加优雅的实现
             self._send_velocity_cmd([0, 0, 0], None, frame="body")
             time.sleep(0.1)
 
     def check_arrive(
-        self,
-        cur_pos: Tuple[float, float, float],
-        goal: Tuple[float, float, float],
+        self, cur_pos: Tuple[float, float, float], goal: Tuple[float, float, float]
     ):
         dis = np.sqrt((cur_pos[0] - goal[0]) ** 2 + (cur_pos[1] - goal[1]) ** 2)
         return dis
@@ -161,6 +154,7 @@ class DogController(CallbackManager, BaseController):
         with self._odom_lock:
             if self._odom is None:
                 return 0.0
+
             q = self._odom.pose.pose.orientation
             # 四元数转 yaw
             _, _, yaw = tf.transformations.euler_from_quaternion([q.x, q.y, q.z, q.w])
@@ -224,6 +218,7 @@ class DogController(CallbackManager, BaseController):
                 self._last_cmd_time = None
             self.move_axis_no_dead_zone(0, 0, 0, 0)
 
+
     # ---- 速度控制 ----
     def _send_velocity_cmd(self, v: list, yaw_rate: Optional[float], frame: str):
         """将速度指令转换为轴指令并发送一次"""
@@ -238,11 +233,11 @@ class DogController(CallbackManager, BaseController):
             raise ValueError(f"不支持的坐标系: {frame}")
 
         vx_body, vy_body, yr = self._limit_acceleration(vx_body, vy_body, yr)
-
         with self.v_max_lock:
             max_vel = self.max_forward_vel if self.max_forward_vel else 1.0
         left_x, left_y, right_x = self._vel_to_axis(vx_body, vy_body, yr, max_vel)
         self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
+
 
     # ---- 位置控制 ----
     def _start_position_control(
@@ -303,29 +298,29 @@ class DogController(CallbackManager, BaseController):
             if self._pos_ctrl_stop.is_set() or init_pos is None:
                 logger.info("位置控制线程退出（等待odom期间被停止）")
                 return
+
             assert init_pos is not None  # 让类型检查器确认非 None
             init_yaw = self._get_current_yaw_enu()
             tx_orig, ty_orig = tx, ty
             tx = (
-                init_pos[0]
-                + tx_orig * math.cos(init_yaw)
-                - ty_orig * math.sin(init_yaw)
+                init_pos[0] +
+                tx_orig *
+                math.cos(init_yaw) -
+                ty_orig *
+                math.sin(init_yaw)
             )
             ty = (
-                init_pos[1]
-                + tx_orig * math.sin(init_yaw)
-                + ty_orig * math.cos(init_yaw)
+                init_pos[1] +
+                tx_orig *
+                math.sin(init_yaw) +
+                ty_orig *
+                math.cos(init_yaw)
             )
             frame = "enu"  # 后续统一按 ENU 处理
-
-        FREEZE_DIST = (
-            0.8  # 距目标 < 此值时锁定 target_direction (m)，防位置噪声驱动方向跳变
-        )
-
+        FREEZE_DIST = 0.8  # 距目标 < 此值时锁定 target_direction (m)，防位置噪声驱动方向跳变
         logger.info(f"位置控制启动: target=({tx:.2f}, {ty:.2f}), frame={frame}")
         frozen_direction: Optional[float] = None  # 接近目标时锁定的方向
         compute_yaw_rate = YawController()
-
         goal_pub = rospy.Publisher("/move_base_simple/goal3", PoseStamped, queue_size=1)
         goal = PoseStamped()
         goal.header.frame_id = "map"
@@ -334,7 +329,6 @@ class DogController(CallbackManager, BaseController):
         goal.pose.position.y = ty
         goal.pose.orientation.w = 1.0
         goal_pub.publish(goal)
-
         while not self._pos_ctrl_stop.is_set():
             cur_pos = self._get_current_pos_enu()
             if cur_pos is None:
@@ -348,7 +342,7 @@ class DogController(CallbackManager, BaseController):
             else:
                 raise ValueError(f"不支持的坐标系: {frame}")
 
-            dist = math.sqrt(ex**2 + ey**2)
+            dist = math.sqrt(ex ** 2 + ey ** 2)
             if dist < POS_THRESHOLD:
                 logger.info(f"已到达目标位置，误差={dist:.3f}m")
                 # 发送零速停止
@@ -357,7 +351,6 @@ class DogController(CallbackManager, BaseController):
 
             # 获取当前yaw
             cur_yaw = self._get_current_yaw_enu()
-
             # 确定目标朝向
             if target_yaw_val is not None:
                 target_direction = target_yaw_val
@@ -366,27 +359,28 @@ class DogController(CallbackManager, BaseController):
                 if dist > FREEZE_DIST or frozen_direction is None:
                     frozen_direction = math.atan2(ey, ex)  # enu xy -> enu yaw
                 target_direction = frozen_direction
-
             yr = compute_yaw_rate(cur_yaw, target_direction)
-
             scale = math.cos(
                 np.clip(
-                    np.sqrt(np.abs(compute_yaw_rate.prev_yaw_err)) * 3, -np.pi, np.pi
+                    np.sqrt(np.abs(compute_yaw_rate.prev_yaw_err)) * 3, - np.pi, np.pi
                 )
             )
-
             # 距离小于2m, 使用二次函数调整
             if dist < 2:
                 dist = dist * dist / 4
             vx_body = min(KP * dist, MAX_VEL) * max(0.0, scale)
             vy_body = 0.0
-
             vx_body, vy_body, yr = self._limit_acceleration(vx_body, vy_body, yr)
-            self.wsproxy.state(dict(yaw_diff=f"{compute_yaw_rate.prev_yaw_err:.2f}", yr=f"{yr:.2f}", vx=f"{vx_body:.2f}"))
+            self.wsproxy.state(
+                dict(
+                    yaw_diff=f"{compute_yaw_rate.prev_yaw_err:.2f}",
+                    yr=f"{yr:.2f}",
+                    vx=f"{vx_body:.2f}",
+                )
+            )
             logger.error(
                 f"dis_err={dist:.2f} dir={target_direction:.2f} cur_yaw={cur_yaw:.2f} err={compute_yaw_rate.prev_yaw_err:.2f} yr={yr:.2f} vx={vx_body:.2f}"
             )
-
             with self.v_max_lock:
                 max_vel = self.max_forward_vel if self.max_forward_vel else MAX_VEL
             left_x, left_y, right_x = self._vel_to_axis(
@@ -394,7 +388,6 @@ class DogController(CallbackManager, BaseController):
             )
             self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
             time.sleep(dt)
-
         self.move_axis_no_dead_zone(0, 0, 0, 0)
         logger.info("位置控制线程退出")
 
@@ -422,7 +415,6 @@ class DogController(CallbackManager, BaseController):
             else:
                 dt = now - self._last_cmd_time
             self._last_cmd_time = now
-
             if dt <= 0:
                 self._last_vx = vx_target
                 self._last_vy = vy_target
@@ -431,28 +423,22 @@ class DogController(CallbackManager, BaseController):
 
             max_dv = self.max_accel * dt
             max_d_yaw_rate = self.max_yaw_accel * dt
-
             dvx = vx_target - self._last_vx
             dvy = vy_target - self._last_vy
             d_yaw_rate = yaw_rate_target - self._last_yaw_rate
-
-            d_vel = math.sqrt(dvx**2 + dvy**2)
+            d_vel = math.sqrt(dvx ** 2 + dvy ** 2)
             if d_vel > max_dv:
                 scale = max_dv / d_vel
                 dvx *= scale
                 dvy *= scale
-
             if abs(d_yaw_rate) > max_d_yaw_rate:
                 d_yaw_rate = max_d_yaw_rate if d_yaw_rate > 0 else -max_d_yaw_rate
-
             vx_limited = self._last_vx + dvx
             vy_limited = self._last_vy + dvy
             yaw_rate_limited = self._last_yaw_rate + d_yaw_rate
-
             self._last_vx = vx_limited
             self._last_vy = vy_limited
             self._last_yaw_rate = yaw_rate_limited
-
             return vx_limited, vy_limited, yaw_rate_limited
 
     def is_alt_enable(self):
@@ -486,6 +472,25 @@ class DogController(CallbackManager, BaseController):
             data = pack_q25_udp_cmd(CommandType.MOVE_YAW_AXIS, parameter_size=yaw)
             socketc.send_to_server(self, data)
 
+    def set_joystick(
+        self,
+        left_x: float = 0,
+        left_y: float = 0,
+        right_x: float = 0,
+        right_y: float = 0,
+    ):
+        """【新无死区】三轴运动控制（推荐使用），机体坐标系FLU，
+        注意这个API的xy是相反的，和文档不一样
+
+        :param left_x: X轴速度（-1~1，正向前）
+        :param left_y: Y轴速度（-1~1，正向左）
+        :param right_x: Yaw角速度（-1~1，正左转）
+        :param right_y: 预留（固定为0）
+        """
+        return self.move_axis_no_dead_zone(
+            int(left_x * 1e3), int(left_y * 1e3), int(right_x * 1e3), int(right_y * 1e3)
+        )
+
     def move_axis_no_dead_zone(
         self, left_x: int = 0, left_y: int = 0, right_x: int = 0, right_y: int = 0
     ):
@@ -513,6 +518,7 @@ class DogController(CallbackManager, BaseController):
             data=axis_data,
         )
         socketc.send_to_server(self, data)
+
 
     # ===================== 接收类指令（SOCKET监听）=====================
     @sockets.recv(CommandType.BATTERY_LEVEL_REPORT, frequency=1)
@@ -654,6 +660,7 @@ class DogController(CallbackManager, BaseController):
         }
         self.wsproxy.error(error)
 
+
     # ===================== 辅助工具方法 =====================
     @staticmethod
     def _format_joint_data(joint_data: LegJointData) -> dict:
@@ -680,6 +687,7 @@ class DogController(CallbackManager, BaseController):
                 "knee": round(joint_data.hr_knee, 3),
             },
         }
+
 
     # ===================== 心跳发送线程（2Hz）=====================
     def heartbeat_thread(self):
