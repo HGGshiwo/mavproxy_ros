@@ -1,6 +1,6 @@
 <launch>
     <arg name="debug" default="false" />
-    <arg name="planner_enable" default="true"/>
+    <arg name="planner_enable" default="false"/>
     <!-- <arg name="controller_name" default="drone" /> -->
     <arg name="controller_name" default="dog" />
     <arg name="param_file" default="$(find mavproxy_ros)/config/param.yml" />

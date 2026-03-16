@@ -791,10 +791,10 @@ class Control(CallbackManager, ROSProxy):
         self.target_pub = rospy.Publisher(
             "/UAV0/perception/object_location/obj_lla", PointStamped, queue_size=1
         )
-        self.planner_enable = rosparam_field("planner_enable", True)
+        self.planner_enable = rosparam_field("~planner_enable", True)
         self.auto_planner_enable = self.planner_enable  # 是否允许在停止检测后自动打开避障
-        self.pland_enable = rosparam_field("pland_enable", default=True)  # 是否进行精准降落
-        self.min_alt_threshold = rosparam_field("min_alt_threshold", 0.5)
+        self.pland_enable = rosparam_field("~pland_enable", default=True)  # 是否进行精准降落
+        self.min_alt_threshold = rosparam_field("~min_alt_threshold", 0.5)
         self.controller_name = rospy.get_param(
             "/mavproxy/control/controller_name", None
         )

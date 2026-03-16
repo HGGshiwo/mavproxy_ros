@@ -41,8 +41,8 @@ class Pland(CallbackManager, ROSProxy):
         self.camera_fov_xy = None
         self.info_lock = threading.Lock()
         self.detect_lock = threading.Lock()
-        self.tag_id = rosparam_field("tag_id", 0)
-        self.tag_type = rosparam_field("tag_type", "tagCustom48h12")
+        self.tag_id = rosparam_field("~tag_id", 0)
+        self.tag_type = rosparam_field("~tag_type", "tagCustom48h12")
         self.detector = self._create_detector()
         self.odom: Odometry = rostopic_field(
             "/mavros/local_position/odom", Odometry, timeout=0.1
