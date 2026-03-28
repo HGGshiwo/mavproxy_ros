@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+from functools import partial
 import math
 import struct
 import threading
@@ -8,6 +9,10 @@ from logging import getLogger
 from typing import Callable, Optional
 
 import numpy as np
+from mavproxy_ros.controller.controller_utils import (
+    CtrlFrame,
+    VelController,
+)
 import rospy
 import tf
 import tf.transformations
@@ -99,16 +104,22 @@ class DogController(CallbackManager, BaseController):
         rospy.Subscriber(
             "/mavros/local_position/odom", Odometry, self._odom_callback, queue_size=1
         )
-        # 位置控制后台线程管理
-        self._pos_ctrl_thread: Optional[threading.Thread] = None
-        self._pos_ctrl_stop = threading.Event()
-        self._pos_ctrl_lock = threading.Lock()
+        self.vel_controller = VelController(self.controller_cb)
+
         self.wsproxy = ros.create_wsproxy()
         heartbeat_t = threading.Thread(
             target=self.heartbeat_thread, daemon=True, name="heartbeat-thread"
         )
         heartbeat_t.start()
         logger.info("心跳线程已启动（2Hz）")
+
+    def controller_cb(self, vx_body, vy_body, yaw_rate):
+        with self.v_max_lock:
+            max_vel = self.max_forward_vel if self.max_forward_vel else 1
+        left_x, left_y, right_x = self._vel_to_axis(
+            vx_body, vy_body, yaw_rate, max_vel, max_yaw_rate=1.0
+        )
+        self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
 
     def is_pland_enable(self):
         """该模式下是否允许精准降落"""
@@ -202,244 +213,8 @@ class DogController(CallbackManager, BaseController):
           "enu"  — ENU坐标系下: x为E, y为N, z为U
           "body" — 机体坐标系下: x为前, y为左, z为下
         """
-        resolved_frame: str = frame if frame is not None else "enu"
         logger.info(f"do_send_cmd: p={p}, v={v}, a={a}, frame={frame}")
-        if v is not None:
-            self._stop_position_control()
-            self._send_velocity_cmd(v, yaw_rate, resolved_frame)
-        elif p is not None:
-            self._start_position_control(p, yaw, resolved_frame)
-        else:
-            self._stop_position_control()
-            with self._accel_lock:
-                self._last_vx = 0.0
-                self._last_vy = 0.0
-                self._last_yaw_rate = 0.0
-                self._last_cmd_time = None
-            self.move_axis_no_dead_zone(0, 0, 0, 0)
-
-
-    # ---- 速度控制 ----
-    def _send_velocity_cmd(self, v: list, yaw_rate: Optional[float], frame: str):
-        """将速度指令转换为轴指令并发送一次"""
-        vx, vy = float(v[0]), float(v[1]) if len(v) > 1 else 0.0
-        yr = float(yaw_rate) if yaw_rate is not None else 0.0
-        if frame == "enu":
-            cur_yaw = self._get_current_yaw_enu()
-            vx_body, vy_body = self._enu_vel_to_body(vx, vy, cur_yaw)
-        elif frame == "body":
-            vx_body, vy_body = vx, vy
-        else:
-            raise ValueError(f"不支持的坐标系: {frame}")
-
-        vx_body, vy_body, yr = self._limit_acceleration(vx_body, vy_body, yr)
-        with self.v_max_lock:
-            max_vel = self.max_forward_vel if self.max_forward_vel else 1.0
-        left_x, left_y, right_x = self._vel_to_axis(vx_body, vy_body, yr, max_vel)
-        self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
-
-
-    # ---- 位置控制 ----
-    def _start_position_control(
-        self, target_p: list, target_yaw: Optional[float], frame: str
-    ):
-        """停止旧的位置控制线程，启动新的位置控制线程"""
-        self._stop_position_control()
-        with self._pos_ctrl_lock:
-            self._pos_ctrl_stop.clear()
-            self._pos_ctrl_thread = threading.Thread(
-                target=self._position_control_loop,
-                args=(target_p, target_yaw, frame),
-                daemon=True,
-                name="pos-ctrl-thread",
-            )
-            self._pos_ctrl_thread.start()
-
-    def _stop_position_control(self):
-        """停止当前位置控制线程（如存在）"""
-        with self._pos_ctrl_lock:
-            if self._pos_ctrl_thread and self._pos_ctrl_thread.is_alive():
-                self._pos_ctrl_stop.set()
-                self._pos_ctrl_thread.join(timeout=2.0)
-                self._pos_ctrl_thread = None
-        with self._accel_lock:
-            self._last_vx = 0.0
-            self._last_vy = 0.0
-            self._last_yaw_rate = 0.0
-            self._last_cmd_time = None
-
-    def _position_control_loop(
-        self, target_p: list, target_yaw: Optional[float], frame: str
-    ):
-        """
-        位置控制循环（后台线程）：用简单比例控制不断发送速度指令，
-        直到到达目标位置（XY 误差 < 阈值）或被外部停止。
-
-        如果未指定yaw，则自动将机头对准目标方向并同时前进。
-        """
-        POS_THRESHOLD = 0.15  # 到位阈值 (m)
-        KP = 1.0  # 比例增益
-        MAX_VEL = 1  # 最大控制速度 (m/s)
-        RATE = 10  # 控制频率 (Hz)
-        dt = 1.0 / RATE
-        tx = float(target_p[0])
-        ty = float(target_p[1]) if len(target_p) > 1 else 0.0
-        # 目标 yaw（仅在 ENU 模式下支持）
-        target_yaw_val = float(target_yaw) if target_yaw is not None else None
-        # body 坐标系：在进入循环前一次性转换为 ENU 绝对目标点
-        if frame == "body":
-            # 等待第一帧 odom
-            init_pos = None
-            while init_pos is None and not self._pos_ctrl_stop.is_set():
-                init_pos = self._get_current_pos_enu()
-                if init_pos is None:
-                    logger.warning("尚未收到 odom，等待（body->ENU转换）...")
-                    time.sleep(dt)
-            if self._pos_ctrl_stop.is_set() or init_pos is None:
-                logger.info("位置控制线程退出（等待odom期间被停止）")
-                return
-
-            assert init_pos is not None  # 让类型检查器确认非 None
-            init_yaw = self._get_current_yaw_enu()
-            tx_orig, ty_orig = tx, ty
-            tx = (
-                init_pos[0] +
-                tx_orig *
-                math.cos(init_yaw) -
-                ty_orig *
-                math.sin(init_yaw)
-            )
-            ty = (
-                init_pos[1] +
-                tx_orig *
-                math.sin(init_yaw) +
-                ty_orig *
-                math.cos(init_yaw)
-            )
-            frame = "enu"  # 后续统一按 ENU 处理
-        FREEZE_DIST = 0.8  # 距目标 < 此值时锁定 target_direction (m)，防位置噪声驱动方向跳变
-        logger.info(f"位置控制启动: target=({tx:.2f}, {ty:.2f}), frame={frame}")
-        frozen_direction: Optional[float] = None  # 接近目标时锁定的方向
-        compute_yaw_rate = YawController()
-        goal_pub = rospy.Publisher("/move_base_simple/goal3", PoseStamped, queue_size=1)
-        goal = PoseStamped()
-        goal.header.frame_id = "map"
-        goal.header.stamp = rospy.Time.now()
-        goal.pose.position.x = tx
-        goal.pose.position.y = ty
-        goal.pose.orientation.w = 1.0
-        goal_pub.publish(goal)
-        while not self._pos_ctrl_stop.is_set():
-            cur_pos = self._get_current_pos_enu()
-            if cur_pos is None:
-                logger.warning("尚未收到 odom，等待...")
-                time.sleep(dt)
-                continue
-
-            if frame == "enu":
-                ex = tx - cur_pos[0]
-                ey = ty - cur_pos[1]
-            else:
-                raise ValueError(f"不支持的坐标系: {frame}")
-
-            dist = math.sqrt(ex ** 2 + ey ** 2)
-            if dist < POS_THRESHOLD:
-                logger.info(f"已到达目标位置，误差={dist:.3f}m")
-                # 发送零速停止
-                self.move_axis_no_dead_zone(0, 0, 0, 0)
-                break
-
-            # 获取当前yaw
-            cur_yaw = self._get_current_yaw_enu()
-            # 确定目标朝向
-            if target_yaw_val is not None:
-                target_direction = target_yaw_val
-            else:
-                # 远离目标时持续更新朝向；接近目标时锁定方向，避免位置噪声驱动方向抖动
-                if dist > FREEZE_DIST or frozen_direction is None:
-                    frozen_direction = math.atan2(ey, ex)  # enu xy -> enu yaw
-                target_direction = frozen_direction
-            yr = compute_yaw_rate(cur_yaw, target_direction)
-            scale = math.cos(
-                np.clip(
-                    np.sqrt(np.abs(compute_yaw_rate.prev_yaw_err)) * 3, - np.pi, np.pi
-                )
-            )
-            # 距离小于2m, 使用二次函数调整
-            if dist < 2:
-                dist = dist * dist / 4
-            vx_body = min(KP * dist, MAX_VEL) * max(0.0, scale)
-            vy_body = 0.0
-            vx_body, vy_body, yr = self._limit_acceleration(vx_body, vy_body, yr)
-            self.wsproxy.state(
-                dict(
-                    yaw_diff=f"{compute_yaw_rate.prev_yaw_err:.2f}",
-                    yr=f"{yr:.2f}",
-                    vx=f"{vx_body:.2f}",
-                )
-            )
-            logger.error(
-                f"dis_err={dist:.2f} dir={target_direction:.2f} cur_yaw={cur_yaw:.2f} err={compute_yaw_rate.prev_yaw_err:.2f} yr={yr:.2f} vx={vx_body:.2f}"
-            )
-            with self.v_max_lock:
-                max_vel = self.max_forward_vel if self.max_forward_vel else MAX_VEL
-            left_x, left_y, right_x = self._vel_to_axis(
-                vx_body, vy_body, yr, max_vel, max_yaw_rate=1.0
-            )
-            self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)
-            time.sleep(dt)
-        self.move_axis_no_dead_zone(0, 0, 0, 0)
-        logger.info("位置控制线程退出")
-
-    @staticmethod
-    def _enu_vel_to_body(vx_enu: float, vy_enu: float, yaw: float) -> tuple:
-        """ENU 速度旋转到机体系（FLU：x=前, y=左）"""
-        vx_body = vx_enu * math.cos(yaw) + vy_enu * math.sin(yaw)
-        vy_body = -vx_enu * math.sin(yaw) + vy_enu * math.cos(yaw)
-        return vx_body, vy_body
-
-    def _limit_acceleration(
-        self, vx_target: float, vy_target: float, yaw_rate_target: float
-    ) -> tuple:
-        """限制加速度和角加速度，返回限制后的速度
-
-        :param vx_target: 目标x方向速度 (m/s)
-        :param vy_target: 目标y方向速度 (m/s)
-        :param yaw_rate_target: 目标角速度 (rad/s)
-        :return: (vx_limited, vy_limited, yaw_rate_limited)
-        """
-        now = time.time()
-        with self._accel_lock:
-            if self._last_cmd_time is None:
-                dt = 0.0
-            else:
-                dt = now - self._last_cmd_time
-            self._last_cmd_time = now
-            if dt <= 0:
-                self._last_vx = vx_target
-                self._last_vy = vy_target
-                self._last_yaw_rate = yaw_rate_target
-                return vx_target, vy_target, yaw_rate_target
-
-            max_dv = self.max_accel * dt
-            max_d_yaw_rate = self.max_yaw_accel * dt
-            dvx = vx_target - self._last_vx
-            dvy = vy_target - self._last_vy
-            d_yaw_rate = yaw_rate_target - self._last_yaw_rate
-            d_vel = math.sqrt(dvx ** 2 + dvy ** 2)
-            if d_vel > max_dv:
-                scale = max_dv / d_vel
-                dvx *= scale
-                dvy *= scale
-            if abs(d_yaw_rate) > max_d_yaw_rate:
-                d_yaw_rate = max_d_yaw_rate if d_yaw_rate > 0 else -max_d_yaw_rate
-            vx_limited = self._last_vx + dvx
-            vy_limited = self._last_vy + dvy
-            yaw_rate_limited = self._last_yaw_rate + d_yaw_rate
-            self._last_vx = vx_limited
-            self._last_vy = vy_limited
-            self._last_yaw_rate = yaw_rate_limited
-            return vx_limited, vy_limited, yaw_rate_limited
+        self.vel_controller.set_target(p, v, yaw, yaw_rate, frame)
 
     def is_alt_enable(self):
         return False

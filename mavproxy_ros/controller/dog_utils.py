@@ -8,53 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from event_callback.utils import classproperty
 
 
-class YawController:
-    """
-    ENU yaw -> FLU yaw_rate
-    """
-
-    def __init__(self):
-        self.frozen_direction: Optional[float] = None  # 接近目标时锁定的方向
-        self.yr_filtered = 0.0  # 低通滤波后的 yaw rate 输出
-        self.prev_yaw_err: Optional[float] = None  # 帧间 yaw 误差，用于跨 ±π 边界展开
-
-    def __call__(self, cur_yaw: float, target_direction: float):
-        """
-        Args:
-            cur_yaw: ENU
-            target_direction: ENU
-
-        Returns:
-            yaw_rate: FLU
-        """
-        YAW_DEADBAND = 0.05  # yaw 死区 (rad ≈ 3°)，消除零点附近高频抖动
-        KP_YAW = 1.0  # yaw 比例增益，偏低以减少振荡
-        YAW_LPF_ALPHA = 0.6  # yaw 输出一阶低通滤波系数（越小越平滑）
-        # 计算 yaw 误差（归一化到 [-π, π]，并做帧间展开防跨界跳变）
-        yaw_err = math.atan2(
-            math.sin(target_direction - cur_yaw), math.cos(target_direction - cur_yaw)
-        )
-        if self.prev_yaw_err is not None:
-            delta = yaw_err - self.prev_yaw_err
-            if delta > math.pi:
-                yaw_err -= 2 * math.pi
-            elif delta < - math.pi:
-                yaw_err += 2 * math.pi
-        self.prev_yaw_err = yaw_err
-        # 死区 + 比例控制，死区内归零避免零点附近反复振荡
-        if abs(yaw_err) < YAW_DEADBAND:
-            yr_raw = 0.0
-        else:
-            # yr是FLU坐标系, 因为都是逆时针，所以和yaw的ENU坐标系一致
-            yr_raw = max(-1.0, min(1.0, yaw_err * KP_YAW))
-        # 一阶低通滤波（EMA），平滑 yaw rate 输出，减少符号反转引起的抖动
-        self.yr_filtered = (
-            YAW_LPF_ALPHA * yr_raw + (1.0 - YAW_LPF_ALPHA) * self.yr_filtered
-        )
-        yr = self.yr_filtered
-        return yr
-
-
 def to_uint32(data):
     data = int(data)
     return ctypes.c_uint32(data).value
