@@ -16,8 +16,8 @@ def goal2_callback(msg):
     # 发布
     pub.publish(obj_msg)
     rospy.loginfo(
-        "Published PointObj with pos: (%.2f, %.2f, %.2f)" %
-        (obj_msg.pos.x, obj_msg.pos.y, obj_msg.pos.z)
+        "Published PointObj with pos: (%.2f, %.2f, %.2f)"
+        % (obj_msg.pos.x, obj_msg.pos.y, obj_msg.pos.z)
     )
 
 

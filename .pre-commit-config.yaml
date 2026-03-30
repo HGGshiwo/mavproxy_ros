@@ -1,0 +1,9 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 24.2.0  # 强制指定版本号，不要用 master！
+    hooks:
+      - id: black
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2  # 强制指定版本号
+    hooks:
+      - id: isort

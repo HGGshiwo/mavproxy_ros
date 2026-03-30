@@ -36,8 +36,6 @@ class SetPosVelModel(BaseModel):
     timeout: Optional[float] = 2  # 接口超时时间
 
 
-
-
 # Other
 class StartRecordModel(BaseModel):
     bag_name: str
@@ -60,8 +58,6 @@ class SetExposureModel(BaseModel):
 
 class StartDetectModel(BaseModel):
     type: str = "smoke"
-
-
 
 
 # Param

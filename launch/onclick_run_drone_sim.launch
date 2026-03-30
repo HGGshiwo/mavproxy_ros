@@ -1,0 +1,14 @@
+<launch>
+    <arg name="debug" default="false" />
+    <arg name="planner_enable" deafult="false" />
+    <include file="$(find mavproxy_ros)/launch/onclick_run.launch">
+        <arg name="planner_enable" value="$(arg planner_enable)" />
+        <arg name="controller_name" value="drone" />
+        <arg name="start_ntrip" value="false" />
+        <arg name="pland_enable" value="false" />
+        <arg name="pland_image_topic" value="/roscam/cam/image_raw" />
+        <arg name="pland_image_compressed_topic" value="/roscam/cam/compressed" />
+        <arg name="pland_camera_info_topic" value="/UAV0/sensor/video11_camera/cam_info" />
+        <arg name="debug" value="$(arg debug)" />
+    </include>
+</launch>

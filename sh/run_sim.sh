@@ -5,7 +5,7 @@ sim_vehicle.py --no-rebuild --no-mavproxy -v Rover -f gazebo-rover --custom-loca
 
 roslaunch gazebo_sim apm.launch fcu_url:=tcp://:5760@
 # rosrun mavproxy_ros pland.py /pland_camera/image_raw:=/roscam/cam/image_raw
-roslaunch mavproxy_ros onclick_run.launch
+roslaunch mavproxy_ros onclick_run_dog_sim.launch
 rosrun rsos_msgs fake_record.py
 
 rosrun mavros mavsys rate --all 10

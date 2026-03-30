@@ -1,0 +1,17 @@
+<launch>
+    <arg name="debug" default="false" />
+    <arg name="planner_enable" default="false" />
+    <include file="$(find mavproxy_ros)/launch/onclick_run.launch">
+        <arg name="planner_enable" value="$(arg planner_enable)" />
+        <arg name="controller_name" value="dog" />
+        <arg name="start_ntrip" value="false" />
+        <arg name="pland_enable" value="false" />
+        <!-- dog命令的地址发送目标地址 -->
+        <arg name="udp_host" default="localhost" />
+        <arg name="udp_port" default="9112" />
+        <!-- dog命令接收的地址 -->
+        <arg name="udp_server_host" default="0.0.0.0" />
+        <arg name="udp_server_port" default="9111" />
+        <arg name="debug" value="$(arg debug)" />
+    </include>
+</launch>

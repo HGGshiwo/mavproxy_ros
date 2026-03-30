@@ -1,16 +1,14 @@
-from enum import Enum
-from logging import getLogger
 import math
 import threading
 import time
+from enum import Enum
+from logging import getLogger
 from typing import Callable, Optional, Tuple
 
 import numpy as np
-
 import rospy
 import tf
 import tf.transformations
-
 
 logger = getLogger(__name__)
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
@@ -80,8 +78,24 @@ class YawController:
         return yr
 
 
-class VelController:
+class TimeoutValue:
+    def __init__(self, value=None, timeout_secs: float = 1):
+        self.time = 0
+        self.value = value
+        self.timeout_secs = timeout_secs
 
+    def set(self, value=None):
+        self.time = time.time()
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def timeout(self):
+        return time.time() - self.time > self.timeout_secs
+
+
+class VelController:
     """
     支持将不同类型的期望值转为vel + yaw_rate控制:
     - 位置 + yaw + yaw_rate （没有指定yaw则调整到速度方向）
@@ -99,7 +113,7 @@ class VelController:
     ):
         self.dt = 1.0 / control_hz
         self.max_acc = max_acc
-        self.max_raw_rate = max_yaw_acc
+        self.max_yaw_acc = max_yaw_acc
 
         self.controller_cb = controller_cb
         self.vel = None
@@ -111,8 +125,10 @@ class VelController:
         self.target_vel = None
         self.target_yaw = None
         self.target_yaw_rate = None
-        self.vel_timeout = vel_timeout
-        self.vel_timestamp = 0
+        self.target_timeout = TimeoutValue(timeout_secs=vel_timeout)
+
+        self.last_vel = TimeoutValue([0, 0, 0], timeout_secs=1)
+        self.last_yaw_rate = TimeoutValue(0, timeout_secs=1)
 
         self.yaw_controller = YawController()
         self.target_lock = threading.Lock()
@@ -177,10 +193,7 @@ class VelController:
         if self.vel is None or self.pos is None or self.yaw is None:
             logger.warning("No odom, ignore set_target")
             return
-        logger.info(
-            f"set_target: p={pos}, v={vel}, yaw={yaw}, yaw_rate={yaw_rate}, frame={frame}"
-        )
-        self.vel_timestamp = time.time()
+        self.target_timeout.set()
         if frame == "body":
             if pos is not None:
                 pos = self.pos_body2enu(pos)
@@ -194,7 +207,7 @@ class VelController:
             # yaw+yaw_rate和pos+vel组内互相覆盖，组间不会覆盖
             group1 = yaw is not None or yaw_rate is not None
             group2 = pos is not None or vel is not None
-            
+
             if group2:
                 self.target_pos = pos
                 self.target_vel = vel
@@ -212,37 +225,26 @@ class VelController:
             goal.pose.position.y = pos[1]
             if yaw is not None:
                 orientation = tf.transformations.quaternion_from_euler(0, 0, yaw)
+            else:
+                orientation = [0, 0, 0, 1]
             goal.pose.orientation.x = orientation[0]
             goal.pose.orientation.y = orientation[1]
             goal.pose.orientation.z = orientation[2]
             goal.pose.orientation.w = orientation[3]
             goal_pub.publish(goal)
 
-    def _get_yaw_rate(self, yaw: float = None, yaw_rate: float = None):
-        """根据目标的yaw和yaw_rate计算最后的yaw_rate"""
-        _yaw_rate = None
-        if yaw is not None:  # yaw -> yaw_rate
-            _yaw_rate = self.yaw_controller(self.yaw, yaw)
-            _yaw_rate = self._limit_yaw_rate(_yaw_rate)
-
-        if _yaw_rate is not None:
-            if yaw_rate is not None:
-                yaw_rate = _yaw_rate + yaw_rate
-            else:
-                yaw_rate = _yaw_rate
-        return yaw_rate
-
-
     def _limit_yaw_rate(self, yaw_rate_target: float):
         max_d_yaw_rate = self.max_yaw_acc * self.dt
-        last_yaw_rate = self.yaw_rate
+        last_yaw_rate = 0 if self.last_yaw_rate.timeout() else self.last_yaw_rate.get()
+        self.last_yaw_rate.set(yaw_rate_target)
         d_yaw_rate = yaw_rate_target - last_yaw_rate
         if abs(d_yaw_rate) > max_d_yaw_rate:
             d_yaw_rate = max_d_yaw_rate if d_yaw_rate > 0 else -max_d_yaw_rate
         yaw_rate_limited = last_yaw_rate + d_yaw_rate
+        # rospy.logerr(f"yaw_rate {self.yaw_rate} {yaw_rate_target} { yaw_rate_limited}")
         return yaw_rate_limited
 
-    def _limit_vel(self, vx_target: float, vy_target: float, yaw_rate_target: float):
+    def _limit_vel(self, vx_target: float, vy_target: float):
         """限制加速度和角加速度，返回限制后的速度
 
         :param vx_target: 目标x方向速度 (m/s)
@@ -250,9 +252,10 @@ class VelController:
         :return: (vx_limited, vy_limited)
         """
         max_dv = self.max_acc * self.dt
-
-        last_vel_x = self.vel[0]
-        last_vel_y = self.vel[1]
+        last_vel = [0, 0] if self.last_vel.timeout() else self.last_vel.get()
+        self.last_vel.set([vx_target, vy_target])
+        last_vel_x = last_vel[0]
+        last_vel_y = last_vel[1]
 
         dvx = vx_target - last_vel_x
         dvy = vy_target - last_vel_y
@@ -265,7 +268,7 @@ class VelController:
 
         vx_limited = last_vel_x + dvx
         vy_limited = last_vel_y + dvy
-
+        # logger.error(f"vel {self.vel} {vx_limited} {vy_limited}")
         return vx_limited, vy_limited
 
     def _vel_from_pos(self, target_p, forward_only):
@@ -290,7 +293,7 @@ class VelController:
             dist = dist * dist / 4
         if forward_only:
             return KP * dist, 0
-        vx, vy, _ = self.vel_enu2body(KP * ex, KP * ey)
+        vx, vy, _ = self.vel_enu2body([KP * ex, KP * ey, 0])
         return vx, vy, dist
 
     def _control_loop(self):
@@ -302,12 +305,19 @@ class VelController:
             time.sleep(self.dt)
             with self.target_lock:
                 # 检查是否超时
-                timeout = time.time() - self.vel_timestamp > self.vel_timeout
-                if self.target_vel is not None and timeout:
+                timeout = self.target_timeout.timeout()
+                v_norm = (
+                    0 if self.target_vel is None else np.linalg.norm(self.target_vel)
+                )
+                vr_norm = (
+                    0 if self.target_yaw_rate is None else np.abs(self.target_yaw_rate)
+                )
+                if v_norm > 1e-3 and timeout:
                     self.target_vel = [0, 0, 0]
-                if self.target_yaw_rate is not None and timeout:
+                if vr_norm > 1e-3 and timeout:
                     self.target_yaw_rate = 0
-
+                # if timeout:
+                #     logger.error(f"timeout {self.target_yaw_rate}")
                 if (
                     (
                         self.target_pos is None
@@ -320,7 +330,6 @@ class VelController:
                     or self.vel is None
                 ):
                     continue  # 无控制量
-
                 target_p = self.target_pos
                 target_v = self.target_vel
                 target_yaw = self.target_yaw
@@ -329,23 +338,20 @@ class VelController:
             # 计算位置控制对速度的影响
             vx_body, vy_body, yaw_rate = 0, 0, 0
             cur_yaw = self.yaw
-
+            dist = 0
             if target_p is not None:
                 forward_only = target_yaw is None and yaw_rate is None
                 vx, vy, dist = self._vel_from_pos(target_p, forward_only)
                 vx_body += vx
                 vy_body += vy
-
             if target_v is not None:
-                vx, vy, _ = self.vel_enu2body([vx, vy, 0])
+                vx, vy, _ = self.vel_enu2body([target_v[0], target_v[1], 0])
                 vx_body += vx
                 vy_body += vy
-
             # yaw_rate不区分body or enu，直接视为body系即可
             if target_yaw is not None:
                 vr = self.yaw_controller(self.yaw, target_yaw)
                 yaw_rate += vr
-
             if target_yaw_rate is not None:
                 yaw_rate += target_yaw_rate
 
@@ -356,20 +362,11 @@ class VelController:
             err = np.clip(np.sqrt(np.abs(yaw_rate)) * 3, -np.pi, np.pi)
             scale = math.cos(err)
             # 最大速度限制
-            v_norm = np.sqrt(vx_body * vx_body + vy_body * vy_body)
-            v_norm_new = np.clip(v_norm * scale, 1e-8, MAX_VEL)
+            v_norm = np.sqrt(vx_body * vx_body + vy_body * vy_body) + 1e-8
+            v_norm_new = np.clip(v_norm * scale, 0, MAX_VEL)
             vx_body = vx_body / v_norm * v_norm_new
             vy_body = vy_body / v_norm * v_norm_new
-
             # 加速度限制
             vx_body, vy_body = self._limit_vel(vx_body, vy_body)
-            logger.error(
-                f"dis_err={dist:.2f} dir={target_yaw:.2f} cur_yaw={cur_yaw:.2f} err={self.yaw_controller.prev_yaw_err:.2f} yr={yaw_rate:.2f} vx={vx_body:.2f}"
-            )
+            target_yaw = 0 if target_yaw is None else target_yaw
             self.controller_cb(vx_body, vy_body, yaw_rate)
-            # with self.v_max_lock:
-            #     max_vel = self.max_forward_vel if self.max_forward_vel else MAX_VEL
-            # left_x, left_y, right_x = self._vel_to_axis(
-            #     vx_body, vy_body, yr, max_vel, max_yaw_rate=1.0
-            # )
-            # self.move_axis_no_dead_zone(left_x, left_y, right_x, 0)

@@ -161,11 +161,12 @@ class Node:
             # 闭包陷阱
             def _cb(data, func=func):
                 try:
-                    res = func(self, ** json.loads(data.request))
+                    res = func(self, **json.loads(data.request))
                     return ProcessRequestResponse(response=json.dumps(res))
 
                 except Exception as e:
                     import traceback
+
                     return ProcessRequestResponse(
                         response=json.dumps(
                             {

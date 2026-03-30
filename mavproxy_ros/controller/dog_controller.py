@@ -1,18 +1,14 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-from functools import partial
 import math
 import struct
 import threading
 import time
+from functools import partial
 from logging import getLogger
 from typing import Callable, Optional
 
 import numpy as np
-from mavproxy_ros.controller.controller_utils import (
-    CtrlFrame,
-    VelController,
-)
 import rospy
 import tf
 import tf.transformations
@@ -20,12 +16,17 @@ from event_callback import CallbackManager, HTTP_ProxyConfig, http_proxy
 from event_callback.components.http.message_handler import MessageType
 from event_callback.components.ros import ros
 from event_callback.components.socket import (
-    SocketClientConfig, SocketServerConfig, socketc, sockets
+    SocketClientConfig,
+    SocketServerConfig,
+    socketc,
+    sockets,
 )
 from event_callback.utils import setup_logger
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
+
+from mavproxy_ros.controller.controller_utils import CtrlFrame, VelController
 
 from .base_controller import BaseController
 from .dog_utils import *
@@ -46,10 +47,10 @@ def router(data: bytes):
 
 
 # host = "192.168.3.20"  # 实际机器人IP（无线接入）
-host = "192.168.1.103"
-port = 43893
-server_port = 43893
-server_host = "0.0.0.0"
+# host = "192.168.1.103"
+# port = 43893
+# server_port = 43893
+# server_host = "0.0.0.0"
 
 
 # host = "192.168.1.103"  # 有线接入IP
@@ -60,10 +61,16 @@ server_host = "0.0.0.0"
 # server_port = 9111
 # host = "localhost"
 # port = 9112
-class DogController(CallbackManager, BaseController):
 
+
+class DogController(CallbackManager, BaseController):
     def __init__(self, trigger_land: Callable):
         # 组件配置
+        server_port = int(rospy.get_param("~udp_server_port"))
+        server_host = rospy.get_param("~udp_server_host")
+        port = int(rospy.get_param("~udp_port"))
+        host = rospy.get_param("~udp_host")
+
         config = [
             SocketServerConfig(
                 host=server_host,
@@ -114,6 +121,7 @@ class DogController(CallbackManager, BaseController):
         logger.info("心跳线程已启动（2Hz）")
 
     def controller_cb(self, vx_body, vy_body, yaw_rate):
+        # logger.info(f"controller_cb {vx_body} {vy_body} {yaw_rate}")
         with self.v_max_lock:
             max_vel = self.max_forward_vel if self.max_forward_vel else 1
         left_x, left_y, right_x = self._vel_to_axis(
@@ -136,9 +144,8 @@ class DogController(CallbackManager, BaseController):
         socketc.send_to_server(self, data)
 
     def loiter(self):
-        self._stop_position_control()
         for i in range(20):  # 发送2s的停止指令，防止还有速度，可能需要更加优雅的实现
-            self._send_velocity_cmd([0, 0, 0], None, frame="body")
+            self.do_send_cmd(v=[0, 0, 0], yaw_rate=0, frame="body")
             time.sleep(0.1)
 
     def check_arrive(
@@ -150,6 +157,19 @@ class DogController(CallbackManager, BaseController):
     def _odom_callback(self, msg: Odometry):
         with self._odom_lock:
             self._odom = msg
+        vel = msg.twist.twist.linear
+        yaw_rate = msg.twist.twist.angular.z
+        pos = msg.pose.pose.position
+        orientation = msg.pose.pose.orientation
+        _, _, yaw = tf.transformations.euler_from_quaternion(
+            [orientation.x, orientation.y, orientation.z, orientation.w]
+        )
+        self.vel_controller.update_state(
+            vel=[vel.x, vel.y, vel.z],
+            pos=[pos.x, pos.y, pos.z],
+            yaw=yaw,
+            yaw_rate=yaw_rate,
+        )
 
     def _get_current_pos_enu(self) -> Optional[list]:
         """获取当前 ENU 坐标系下的位置 [x, y, z]"""
@@ -213,7 +233,9 @@ class DogController(CallbackManager, BaseController):
           "enu"  — ENU坐标系下: x为E, y为N, z为U
           "body" — 机体坐标系下: x为前, y为左, z为下
         """
-        logger.info(f"do_send_cmd: p={p}, v={v}, a={a}, frame={frame}")
+        logger.info(
+            f"do_send_cmd: p={p}, v={v}, a={a}, yaw={yaw} yr={yaw_rate} frame={frame}"
+        )
         self.vel_controller.set_target(p, v, yaw, yaw_rate, frame)
 
     def is_alt_enable(self):
@@ -293,7 +315,6 @@ class DogController(CallbackManager, BaseController):
             data=axis_data,
         )
         socketc.send_to_server(self, data)
-
 
     # ===================== 接收类指令（SOCKET监听）=====================
     @sockets.recv(CommandType.BATTERY_LEVEL_REPORT, frequency=1)
@@ -435,7 +456,6 @@ class DogController(CallbackManager, BaseController):
         }
         self.wsproxy.error(error)
 
-
     # ===================== 辅助工具方法 =====================
     @staticmethod
     def _format_joint_data(joint_data: LegJointData) -> dict:
@@ -462,7 +482,6 @@ class DogController(CallbackManager, BaseController):
                 "knee": round(joint_data.hr_knee, 3),
             },
         }
-
 
     # ===================== 心跳发送线程（2Hz）=====================
     def heartbeat_thread(self):

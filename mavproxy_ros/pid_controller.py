@@ -15,8 +15,8 @@ class PIDController:
         ki,
         kd,
         setpoint=0,
-        output_min= - float("inf"),
-        output_max= float("inf"),
+        output_min=-float("inf"),
+        output_max=float("inf"),
     ):
         # PID 核心参数
         self.kp = kp

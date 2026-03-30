@@ -63,7 +63,9 @@ class Q25RobotState:
         self.battery_level = 85  # 电池电量（%）
         self.is_charging = False  # 是否充电中
         self.motor_temps = [35.0 + random.uniform(0, 5) for _ in range(12)]  # 电机温度
-        self.driver_temps = [32.0 + random.uniform(0, 4) for _ in range(12)]  # 驱动器温度
+        self.driver_temps = [
+            32.0 + random.uniform(0, 4) for _ in range(12)
+        ]  # 驱动器温度
         self.cpu_temp = 45.0 + random.uniform(0, 3)  # CPU温度
         self.cpu_freq = 1800.0 + random.uniform(0, 200)  # CPU主频（MHz）
         # 错误状态
@@ -157,7 +159,9 @@ class Q25RobotState:
                         return False, None
 
                     self.platform_height = param
-                    rospy.loginfo(f"📏  切换平台高度：{'匍匐' if param == 0 else '正常'}")
+                    rospy.loginfo(
+                        f"📏  切换平台高度：{'匍匐' if param == 0 else '正常'}"
+                    )
                     return True, None
 
                 elif cmd_type == CommandType.GAIT_WALK:
@@ -185,7 +189,9 @@ class Q25RobotState:
 
                     self.speed_gear = param
                     self.max_forward_vel = 2.5 if param == 1 else 1.8
-                    rospy.loginfo(f"⚡  切换速度档位：{'高速' if param == 1 else '低速'}")
+                    rospy.loginfo(
+                        f"⚡  切换速度档位：{'高速' if param == 1 else '低速'}"
+                    )
                     return True, None
 
                 elif cmd_type == CommandType.CAMERA_CONTROL:
@@ -211,7 +217,7 @@ class Q25RobotState:
 
                     y = param
                     if -32767 <= y <= -6553:
-                        self.vel_x = ((y + 6553) / 26215) * (- self.max_backward_vel)
+                        self.vel_x = ((y + 6553) / 26215) * (-self.max_backward_vel)
                     elif 6553 <= y <= 32767:
                         self.vel_x = ((y - 6553) / 26215) * self.max_forward_vel
                     else:
@@ -377,15 +383,13 @@ def pack_report_data(
                 hr_knee=0.6 + random.uniform(-0.05, 0.05),
             )
             joint_vel = LegJointData(
-                **
-                {
+                **{
                     k: v * 0.1 + random.uniform(-0.02, 0.02)
                     for k, v in vars(joint_pos).items()
                 }
             )
             joint_tau = LegJointData(
-                **
-                {
+                **{
                     k: abs(v) * 5 + random.uniform(-0.5, 0.5)
                     for k, v in vars(joint_vel).items()
                 }
@@ -425,8 +429,7 @@ def pack_report_data(
             # 电池充电状态上报（0.5Hz）
             return BatteryChargeState(
                 level=to_uint32(state.battery_level), is_charging=state.is_charging
-            ).to_bytes(
-            )
+            ).to_bytes()
 
         elif cmd_enum == CommandType.ERROR_CODE_REPORT:
             # 错误码上报（按需）
@@ -445,8 +448,6 @@ def pack_report_data(
     except Exception as e:
         rospy.loginfo(f"❌  {cmd_enum.name} 打包上报数据失败：{str(e)}")
         return b""
-
-
 
 
 # -------------------------- UDP服务器主逻辑 --------------------------
@@ -534,7 +535,6 @@ class Q25UDPServer:
                 rospy.loginfo(f"❌  上报{cmd_enum.name}失败：{str(e)}")
             time.sleep(interval)
 
-
     # def current_state_callback(self, msg):
     #     """接收unitree_guide发布的当前状态，用于上报"""
     #     self._current_state = msg.data
@@ -561,7 +561,7 @@ class Q25UDPServer:
                     twist.linear.z = 0.0
                     twist.angular.x = 0.0
                     twist.angular.y = 0.0
-                    twist.angular.z = - self.robot_state.vel_yaw
+                    twist.angular.z = -self.robot_state.vel_yaw
                 else:
                     twist.linear.x = 0.0
                     twist.linear.y = 0.0
@@ -613,7 +613,6 @@ class Q25UDPServer:
             print(f"set state: {cmd_info}")
             self._current_state = cmd_info
 
-
     # 生成响应
     # if cmd_enum in [CommandType.CHARGE_REQUEST, CommandType.CHARGE_QUERY_STATUS]:
     #     # 充电指令响应
@@ -634,7 +633,9 @@ class Q25UDPServer:
         try:
             self.socket.bind((self.host, self.port))
         except OSError as e:
-            rospy.loginfo(f"❌ UDP服务器启动失败：端口{self.port}被占用/权限不足，错误：{str(e)}")
+            rospy.loginfo(
+                f"❌ UDP服务器启动失败：端口{self.port}被占用/权限不足，错误：{str(e)}"
+            )
             return
 
         self.running = True

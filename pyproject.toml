@@ -1,0 +1,11 @@
+[tool.black]
+line-length = 88
+# 固定目标 Python 版本，防止因为运行环境 Python 版本不同导致格式化差异
+target-version = ['py39'] 
+# include = '\.pyi?$'
+[tool.isort]
+# 强制 isort 使用与 black 一致的配置（极其重要！）
+profile = "black"
+line_length = 88
+# 可以明确指定 Python 版本，以防内置库识别有误
+py_version = 39

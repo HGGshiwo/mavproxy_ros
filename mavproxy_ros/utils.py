@@ -7,6 +7,25 @@ import requests
 _executor = ThreadPoolExecutor(max_workers=4)
 
 
+def wait_for_debugger():
+    """
+    {
+        "name": "Python: Attach",
+        "type": "debugpy",
+        "request": "attach",
+        "connect": {
+            "host": "localhost",
+            "port": 5678
+        }
+    }
+    """
+    import debugpy
+
+    debugpy.listen(("0.0.0.0", 5678))
+    print("Waiting for debugger attach...")
+    debugpy.wait_for_client()  # 等待 VS Code 连接
+
+
 def SUCCESS_RESPONSE(msg="OK"):
     return {"msg": msg, "status": "success"}
 
@@ -17,7 +36,7 @@ def ERROR_RESPONSE(msg):
 
 class FPSHelper:
 
-    def __init__(self, fps= -1, ps_cb=None):
+    def __init__(self, fps=-1, ps_cb=None):
         self.target_fps = fps
         self.start = time.time()
         self.cnt_start = time.time()

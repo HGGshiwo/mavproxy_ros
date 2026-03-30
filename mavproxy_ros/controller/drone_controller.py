@@ -50,12 +50,9 @@ class DroneController(BaseController):
         self, cur_pos: Tuple[float, float, float], goal: Tuple[float, float, float]
     ):
         dis = np.sqrt(
-            (cur_pos[0] - goal[0]) **
-            2 +
-            (cur_pos[1] - goal[1]) **
-            2 +
-            (cur_pos[2] - goal[2]) **
-            2
+            (cur_pos[0] - goal[0]) ** 2
+            + (cur_pos[1] - goal[1]) ** 2
+            + (cur_pos[2] - goal[2]) ** 2
         )
         return dis
 

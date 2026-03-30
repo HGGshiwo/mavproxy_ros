@@ -52,7 +52,6 @@ class Connection(CallbackManager):
         resp = set_rate(req)
         logger.info("set stream done")
 
-
     # print_logger_info()
     @ros.topic("/mavros/state", State)
     def mode_cb(self, data: State):
