@@ -1,0 +1,21 @@
+name: Pre-commit checks
+
+# 触发条件：当有人 push 代码，或者发起 pull request 时自动运行
+on: [push, pull_request]
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+    # 1. 把你的代码拉取到 GitHub 的服务器上
+    - uses: actions/checkout@v4
+    
+    # 2. 安装 Python 环境 (建议和你项目使用的版本一致，比如 3.8 或 3.10)
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10' 
+        
+    # 3. 运行 pre-commit
+    # 这个官方 Action 非常聪明，它会自动读取你代码里的 .pre-commit-config.yaml
+    # 并且会自动缓存环境，让每次检查速度飞快
+    - uses: pre-commit/action@v3.0.1
