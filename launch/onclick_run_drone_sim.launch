@@ -1,6 +1,6 @@
 <launch>
     <arg name="debug" default="false" />
-    <arg name="planner_enable" deafult="false" />
+    <arg name="planner_enable" default="false" />
     <include file="$(find mavproxy_ros)/launch/onclick_run.launch">
         <arg name="planner_enable" value="$(arg planner_enable)" />
         <arg name="controller_name" value="drone" />

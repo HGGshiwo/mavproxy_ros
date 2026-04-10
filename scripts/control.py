@@ -1315,10 +1315,15 @@ class Control(BaseManager, ROSProxy):
         """
         # 记录进入 posvel 模式之前的状态（排除 posvel 内部状态自身，避免覆盖）
         cur_node_type = self.runner.node.type
+        if cur_node_type in [NodeType.GROUND, NodeType.INIT]:
+            return ERROR_RESPONSE(f"{cur_node_type.value} not support set_posvel!")
+
         posvel_states = (NodeType.POSVEL_MOVE, NodeType.POSVEL_YAW)
         if cur_node_type not in posvel_states:
             self.posvel_node_before = cur_node_type
         # 保存目标参数
+        if len(data.pos) == 2:
+            data.pos.append(0)
         self.posvel_target_pos = data.pos
         self.posvel_target_vel = data.vel
         if data.yaw is not None:

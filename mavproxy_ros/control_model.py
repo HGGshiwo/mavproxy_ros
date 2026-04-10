@@ -1,5 +1,5 @@
 from dataclasses import field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -28,7 +28,7 @@ class SetWaypointModel(BaseModel):
 
 
 class SetPosVelModel(BaseModel):
-    pos: Tuple[float, float, float]  # 目标点, 到达速度=0
+    pos: List[float]  # 目标点, 到达速度=0
     vel: float  # 最大速度限制
     yaw: Optional[float] = None  # 到达后的期望偏航
     # True: 运动中始终固定为yaw指定的方向/False: 调整为目标点后再运动
