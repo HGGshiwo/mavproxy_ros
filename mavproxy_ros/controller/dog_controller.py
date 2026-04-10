@@ -1,10 +1,8 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-import math
 import struct
 import threading
 import time
-from functools import partial
 from logging import getLogger
 from typing import Callable, Optional
 
@@ -12,21 +10,15 @@ import numpy as np
 import rospy
 import tf
 import tf.transformations
-from event_callback import CallbackManager, HTTP_ProxyConfig, http_proxy
-from event_callback.components.http.message_handler import MessageType
-from event_callback.components.ros import ros
-from event_callback.components.socket import (
-    SocketClientConfig,
-    SocketServerConfig,
-    socketc,
-    sockets,
-)
-from event_callback.utils import setup_logger
-from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
+from event_callback.components.http.proxy import HTTP_ProxyComponent
+from event_callback.components.socket.udp import UDPComponent
+from event_callback.core import BaseManager
+from event_callback.ros_utils import create_wsproxy
+from event_callback.utils import setup_logger, throttle
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
 
-from mavproxy_ros.controller.controller_utils import CtrlFrame, VelController
+from mavproxy_ros.controller.controller_utils import VelController
+from mavproxy_ros.message_handler import MessageType
 
 from .base_controller import BaseController
 from .dog_utils import *
@@ -63,7 +55,7 @@ def router(data: bytes):
 # port = 9112
 
 
-class DogController(CallbackManager, BaseController):
+class DogController(BaseManager, BaseController):
     def __init__(self, trigger_land: Callable):
         # 组件配置
         server_port = int(rospy.get_param("~udp_server_port"))
@@ -71,25 +63,14 @@ class DogController(CallbackManager, BaseController):
         port = int(rospy.get_param("~udp_port"))
         host = rospy.get_param("~udp_host")
 
-        config = [
-            SocketServerConfig(
-                host=server_host,
-                port=server_port,
-                socket_type="udp",
-                register=False,
-                decode=False,
-                router=router,
-            ),
-            SocketClientConfig(
-                host=host,
-                port=port,
-                register=False,
-                socket_type="udp",
-                decode=False,
-                router=router,
-            ),
-            HTTP_ProxyConfig(),
-        ]
+        udp_comp = UDPComponent(router=router)
+        udp_comp.start_server(server_host, server_port)
+        self.udp_comp = udp_comp
+
+        self.udp_port = port
+        self.udp_host = host
+        http_comp = HTTP_ProxyComponent()
+
         self.max_backward_vel = None
         self.max_forward_vel = None
         self.v_max_lock = threading.Lock()
@@ -103,7 +84,7 @@ class DogController(CallbackManager, BaseController):
         self._last_yaw_rate = 0.0
         self._last_cmd_time = None
         self._accel_lock = threading.Lock()
-        CallbackManager.__init__(self, config)
+        BaseManager.__init__(self, udp_comp, http_comp)
         BaseController.__init__(self, trigger_land)
         # 订阅 ENU odom，用于位置控制
         self._odom: Optional[Odometry] = None
@@ -113,7 +94,7 @@ class DogController(CallbackManager, BaseController):
         )
         self.vel_controller = VelController(self.controller_cb)
 
-        self.wsproxy = ros.create_wsproxy()
+        self.wsproxy = create_wsproxy()
         heartbeat_t = threading.Thread(
             target=self.heartbeat_thread, daemon=True, name="heartbeat-thread"
         )
@@ -133,15 +114,18 @@ class DogController(CallbackManager, BaseController):
         """该模式下是否允许精准降落"""
         return False
 
+    def send_to_server(self, data):
+        self.udp_comp.send(data, self.udp_host, self.udp_port)
+
     def do_takeoff(self, alt: float):
         """起立"""
         data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
-        socketc.send_to_server(self, data)
+        self.send_to_server(data)
 
     def do_land(self):
         self.loiter()
         data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
-        socketc.send_to_server(self, data)
+        self.send_to_server(data)
 
     def loiter(self):
         for i in range(20):  # 发送2s的停止指令，防止还有速度，可能需要更加优雅的实现
@@ -261,13 +245,13 @@ class DogController(CallbackManager, BaseController):
         """
         if x is not None:
             data = pack_q25_udp_cmd(CommandType.MOVE_X_AXIS, parameter_size=x)
-            socketc.send_to_server(self, data)
+            self.send_to_server(data)
         if y is not None:
             data = pack_q25_udp_cmd(CommandType.MOVE_Y_AXIS, parameter_size=y)
-            socketc.send_to_server(self, data)
+            self.send_to_server(data)
         if yaw is not None:
             data = pack_q25_udp_cmd(CommandType.MOVE_YAW_AXIS, parameter_size=yaw)
-            socketc.send_to_server(self, data)
+            self.send_to_server(data)
 
     def set_joystick(
         self,
@@ -314,10 +298,11 @@ class DogController(CallbackManager, BaseController):
             parameter_size=len(axis_data.to_bytes()),
             data=axis_data,
         )
-        socketc.send_to_server(self, data)
+        self.send_to_server(data)
 
     # ===================== 接收类指令（SOCKET监听）=====================
-    @sockets.recv(CommandType.BATTERY_LEVEL_REPORT, frequency=1)
+    @UDPComponent.on_message(CommandType.BATTERY_LEVEL_REPORT)
+    @throttle(frequency=1)
     def battery_level_report(self, data: bytes):
         """接收电池电量数据（0.5Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
@@ -327,7 +312,8 @@ class DogController(CallbackManager, BaseController):
         json_data = {"battery_level": data_obj.level}
         self.wsproxy.state(json_data)
 
-    @sockets.recv(CommandType.MOTION_STATE_REPORT, frequency=1)
+    @UDPComponent.on_message(CommandType.MOTION_STATE_REPORT)
+    @throttle(frequency=1)
     def motion_state_report(self, data: bytes):
         """接收运动状态数据（200Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
@@ -394,7 +380,8 @@ class DogController(CallbackManager, BaseController):
         # )
         self.wsproxy.state(dict(basic_state=basic_state_desc))
 
-    @sockets.recv(CommandType.RUN_STATUS_REPORT, frequency=1)
+    @UDPComponent.on_message(CommandType.RUN_STATUS_REPORT)
+    @throttle(frequency=1)
     def run_status_report(self, data: bytes):
         """接收运行状态数据（200Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
@@ -436,7 +423,8 @@ class DogController(CallbackManager, BaseController):
             error = ", ".join(error)
             self.wsproxy.error(error)
 
-    @sockets.recv(CommandType.ERROR_CODE_REPORT, frequency=10)
+    @UDPComponent.on_message(CommandType.ERROR_CODE_REPORT)
+    @throttle(frequency=10)
     def error_code_report(self, data: bytes):
         """接收错误码数据"""
         _, data_obj = unpack_q25_udp_cmd(data)
@@ -490,8 +478,7 @@ class DogController(CallbackManager, BaseController):
             try:
                 # 打包手动模式心跳指令（指令值0，基本指令）
                 data = pack_q25_udp_cmd(CommandType.MANUAL_HEARTBEAT, parameter_size=0)
-                # 直接通过socketc发送
-                socketc.send_to_server(self, data)
+                self.send_to_server(data)
                 time.sleep(0.5)  # 2Hz = 每0.5秒一次
             except Exception as e:
                 print(f"心跳发送失败：{e}")

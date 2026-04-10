@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 import rospy
-from event_callback import http_proxy, ros
-from event_callback.core import CallbackManager
+from event_callback.components.http.proxy import HTTP_ProxyComponent
+from event_callback.components.ros import ROSComponent
+from event_callback.core import BaseManager
 from event_callback.ros_utils import rospy_init_node
 from event_callback.utils import setup_logger
 from rsos_msgs.srv import SetGimbalAngle, StartBagRecord
@@ -26,10 +27,10 @@ from mavproxy_ros.control_model import *
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 
-class Other(CallbackManager):
+class Other(BaseManager):
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, ros_node, http_node):
+        super().__init__(ros_node, http_node)
         self.recording = False
         self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
         # fmt: off
@@ -40,7 +41,7 @@ class Other(CallbackManager):
         self.follow_param_name = "/UAV0/perception/object_location/object_location_node/enable_send"
 
     # fmt: on
-    @ros.topic("/mavros/sys_status", SysStatus)
+    @ROSComponent.on_topic("/mavros/sys_status", SysStatus)
     def sys_status_cb(self, msg: SysStatus):
         data = {}
         if msg.battery_remaining != -1:
@@ -51,7 +52,7 @@ class Other(CallbackManager):
             data["voltage_battery"] = msg.voltage_battery / 1000
         self.ws_pub.publish(json.dumps({"type": "state", **data}))
 
-    @http_proxy.post("/start_record")
+    @HTTP_ProxyComponent.on_post("/start_record")
     def start_record(self, data: StartRecordModel):
         service_name = "/data_recorder/start_recording"
         rospy.wait_for_service(service_name, timeout=5)
@@ -64,7 +65,7 @@ class Other(CallbackManager):
         self.recording = True
         return SUCCESS_RESPONSE(res.message)
 
-    @http_proxy.post("/stop_record")
+    @HTTP_ProxyComponent.on_post("/stop_record")
     def stop_record(self):
         service_name = "/data_recorder/stop_recording"
         rospy.wait_for_service(service_name, timeout=5)
@@ -74,16 +75,16 @@ class Other(CallbackManager):
         self.recording = False
         return SUCCESS_RESPONSE()
 
-    @http_proxy.get("/get_record")
+    @HTTP_ProxyComponent.on_get("/get_record")
     def get_record(self):
         return SUCCESS_RESPONSE(msg=self.recording)
 
-    @http_proxy.post("/set_ros_param")
+    @HTTP_ProxyComponent.on_post("/set_ros_param")
     def set_ros_param(self, data: SetRosParamModel):
         rospy.set_param(data.name, data.value)
         return SUCCESS_RESPONSE("OK")
 
-    @http_proxy.get("/get_ros_param{name:path}")
+    @HTTP_ProxyComponent.on_get("/get_ros_param{name:path}")
     def get_ros_param(self, name: str):
         try:
             return SUCCESS_RESPONSE(rospy.get_param(name))
@@ -91,7 +92,7 @@ class Other(CallbackManager):
         except KeyError as e:
             return ERROR_RESPONSE(str(e))
 
-    @http_proxy.get("/get_gimbal")
+    @HTTP_ProxyComponent.on_get("/get_gimbal")
     def get_gimbal(self):
         try:
             mode = rospy.get_param("/UAV0/sensor/serial_gimbal/angle_mode", 0)
@@ -101,7 +102,7 @@ class Other(CallbackManager):
         except Exception as e:
             return ERROR_RESPONSE(str(e))
 
-    @http_proxy.post("/set_gimbal")
+    @HTTP_ProxyComponent.on_post("/set_gimbal")
     def set_gimbal(self, data: SetGimbalModel):
         service_name = "/UAV0/sensor/serial_gimbal/set_gimbal_angle"
         rospy.wait_for_service(service_name, timeout=3)
@@ -112,7 +113,7 @@ class Other(CallbackManager):
 
         return SUCCESS_RESPONSE(res.message)
 
-    @http_proxy.get("/get_exposure")
+    @HTTP_ProxyComponent.on_get("/get_exposure")
     def get_exposure(self):
         data = {
             "shutter": {
@@ -130,7 +131,7 @@ class Other(CallbackManager):
         }
         return SUCCESS_RESPONSE(data)
 
-    @http_proxy.post("/set_exposure")
+    @HTTP_ProxyComponent.on_post("/set_exposure")
     def set_exposure(self, data: SetExposureModel):
         service_name = "/UAV0/sensor/video11_camera/set_exposure"
         rospy.wait_for_service(service_name, timeout=3)
@@ -141,7 +142,7 @@ class Other(CallbackManager):
 
         return SUCCESS_RESPONSE(res.message)
 
-    @http_proxy.post("/start_detect")
+    @HTTP_ProxyComponent.on_post("/start_detect")
     def start_detect(self, data: StartDetectModel):
         for _, name in self.detect_param.items():
             rospy.set_param(name, False)
@@ -155,7 +156,7 @@ class Other(CallbackManager):
         rospy.set_param(self.follow_param_name, True)
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/stop_detect")
+    @HTTP_ProxyComponent.on_post("/stop_detect")
     def stop_detect(self):
         for _, name in self.detect_param.items():
             rospy.set_param(name, False)
@@ -164,7 +165,7 @@ class Other(CallbackManager):
         post_json("start_planner", {"auto": True})
         return SUCCESS_RESPONSE()
 
-    @http_proxy.get("/get_detect")
+    @HTTP_ProxyComponent.on_get("/get_detect")
     def get_detect(self):
         out = ""
         if rospy.get_param(self.follow_param_name, False):
@@ -178,5 +179,7 @@ class Other(CallbackManager):
 
 if __name__ == "__main__":
     rospy_init_node("other")
-    node = Other()
+    ros_node = ROSComponent()
+    http_node = HTTP_ProxyComponent()
+    node = Other(ros_node, http_node)
     rospy.spin()

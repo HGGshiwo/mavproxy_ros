@@ -6,6 +6,9 @@ import os
 import sys
 from pathlib import Path
 
+from event_callback.components.http.proxy import HTTP_ProxyComponent
+from event_callback.components.ros import ROSComponent
+
 from mavproxy_ros.controller import BaseController
 
 _SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -24,8 +27,7 @@ import numpy as np
 import rospy
 import tf
 import tf.transformations
-from event_callback import http_proxy, ros
-from event_callback.core import CallbackManager
+from event_callback.core import BaseManager
 from event_callback.ros_utils import ROSProxy, rosparam_field, rospy_init_node
 from event_callback.utils import setup_logger, throttle
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
@@ -44,12 +46,7 @@ from mavproxy_ros.control_model import *
 from mavproxy_ros.ctrl_node import CtrlNode as _CtrlNode
 from mavproxy_ros.ctrl_node import EventType, Runner
 from mavproxy_ros.pid_controller import PIDController
-from mavproxy_ros.utils import (
-    ERROR_RESPONSE,
-    SUCCESS_RESPONSE,
-    post_json,
-    wait_for_debugger,
-)
+from mavproxy_ros.utils import ERROR_RESPONSE, SUCCESS_RESPONSE, post_json
 
 STOP_SPAN = 100  # 检测到目标后抑制重复检测的冷却时间(s)
 TAKEOFF_THRESHOLD = 0.05  # 起飞/调高到达判定阈值(比例)，实际误差 = 目标高度 × 此值
@@ -729,10 +726,9 @@ class PosVelYawNode(CtrlNode):
             self.step(context.posvel_node_before)
 
 
-class Control(CallbackManager, ROSProxy):
-
-    def __init__(self, component_config=None, mixins=None):
-        super().__init__(component_config, mixins)
+class Control(BaseManager, ROSProxy):
+    def __init__(self, ros_node: ROSComponent, http_node: HTTP_ProxyComponent):
+        ROSProxy.__init__(self)
         self.send_time = 0
         # 状态机使用的变量
         self.rel_alt = None
@@ -836,15 +832,7 @@ class Control(CallbackManager, ROSProxy):
         self.do_send_cmd = self.control.do_send_cmd
         self.pland_enable = self.control.is_pland_enable() and self.pland_enable
 
-    @property
-    def planner_desc(self):
-        return "启用" if self.planner_enable else "关闭"
-
-    @property
-    def pland_desc(self):
-        return "启用" if self.pland_enable else "关闭"
-
-    def _post_init(self):
+        BaseManager.__init__(self, ros_node, http_node)
         verison = rospy.get_param("/mavros/version", "No version")
         self.do_ws_pub(
             {
@@ -856,6 +844,14 @@ class Control(CallbackManager, ROSProxy):
             }
         )
         logger.info("publish done")
+
+    @property
+    def planner_desc(self):
+        return "启用" if self.planner_enable else "关闭"
+
+    @property
+    def pland_desc(self):
+        return "启用" if self.pland_enable else "关闭"
 
     def set_wp_cb(
         self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
@@ -1124,14 +1120,14 @@ class Control(CallbackManager, ROSProxy):
 
             rate.sleep()
 
-    @ros.topic("/mavros/global_position/raw/gps_vel", TwistStamped, 10)
+    @ROSComponent.on_topic("/mavros/global_position/raw/gps_vel", TwistStamped, 10)
     def gps_vel_cb(self, msg: TwistStamped):
         # enu -> ned
         vx = msg.twist.linear.y
         vy = msg.twist.linear.x
         self.do_ws_pub(dict(x_vel=vx, y_vel=vy))
 
-    @ros.topic("/mavros/home_position/home", HomePosition)
+    @ROSComponent.on_topic("/mavros/home_position/home", HomePosition)
     def home_callback(self, msg: HomePosition):
         if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
             self.takeoff_lat = msg.geo.latitude
@@ -1141,23 +1137,23 @@ class Control(CallbackManager, ROSProxy):
                 f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}"
             )
 
-    @ros.topic("/mavros/global_position/global", NavSatFix)
+    @ROSComponent.on_topic("/mavros/global_position/global", NavSatFix)
     def gps_cb(self, data: NavSatFix):
         self.lat = data.latitude
         self.lon = data.longitude
         self.do_ws_pub(dict(lat=self.lat, lon=self.lon))
 
-    @ros.topic("/mavros/global_position/raw/fix", NavSatFix)
+    @ROSComponent.on_topic("/mavros/global_position/raw/fix", NavSatFix)
     def gps_cb2(self, data: NavSatFix):
         self.gps_lat = data.latitude
         self.gps_lon = data.longitude
         self.gps_alt = data.altitude
 
-    @ros.topic("/ego_planner/finish_event", Empty)
+    @ROSComponent.on_topic("/ego_planner/finish_event", Empty)
     def wp_done_cb(self, data=None):
         self.runner.trigger(CEventType.WP_FINISH)
 
-    @ros.topic("/mavros/local_position/odom", Odometry)
+    @ROSComponent.on_topic("/mavros/local_position/odom", Odometry)
     def odom_cb(self, msg: Odometry):
         with self.odom_lock:
             self.odom = msg
@@ -1172,11 +1168,11 @@ class Control(CallbackManager, ROSProxy):
         vy = msg.twist.twist.linear.y
         self.do_ws_pub(dict(yaw=self.yaw, x_vel_body=vx, v_vel_body=vy))
 
-    @ros.topic("/UAV0/perception/object_location/location_vel", PointObj)
+    @ROSComponent.on_topic("/UAV0/perception/object_location/location_vel", PointObj)
     def target_cb(self, msg):
         self.runner.trigger(CEventType.DETECT, msg=msg)
 
-    @ros.topic("/cmd_vel2", Twist)
+    @ROSComponent.on_topic("/cmd_vel2", Twist)
     def cmd_vel_cb(self, cmd_vel_msg: Twist):
         odom_msg = self.get_cur_odom()
         if odom_msg is None:
@@ -1192,33 +1188,33 @@ class Control(CallbackManager, ROSProxy):
         # 构造MAVLink消息
         self.do_send_cmd(v=[vx, vy, vz], yaw=target_yaw, frame="body")
 
-    @ros.topic("/mavros/rc/in", RCIn)
+    @ROSComponent.on_topic("/mavros/rc/in", RCIn)
     def rcin_cb(self, msg: RCIn):
         channels = list(msg.channels)
         while len(channels) < 18:
             channels.append(1500)
         self.rc_channel = (msg.header.stamp, channels)
 
-    @ros.topic("/mavros/global_position/rel_alt", Float64)
+    @ROSComponent.on_topic("/mavros/global_position/rel_alt", Float64)
     def rel_alt_cb(self, data):
         self.rel_alt = data.data
 
-    @ros.topic("/mavros/sys_status", SysStatus)
+    @ROSComponent.on_topic("/mavros/sys_status", SysStatus)
     def systatus_cb(self, data):
         self.sys_status = data
 
-    @ros.topic("/mavros/statustext/recv", StatusText)
+    @ROSComponent.on_topic("/mavros/statustext/recv", StatusText)
     def state_cb(self, data):
         self.state = data.text
 
-    @ros.topic("/mavros/ws", String)
+    @ROSComponent.on_topic("/mavros/ws", String)
     def detect_cb(self, data):
         try:
             self.ws_pub.publish(data)
         except json.JSONDecodeError:
             pass
 
-    @ros.topic("/mavros/state", State)
+    @ROSComponent.on_topic("/mavros/state", State)
     def mode_cb(self, data):
         if self.arm == True and data.armed == False:
             self.runner.trigger(CEventType.DISARM)
@@ -1229,7 +1225,7 @@ class Control(CallbackManager, ROSProxy):
             self.runner.trigger(CEventType.SET_LAND)
         self.mode = data.mode
 
-    @ros.topic("/drone_0_ego_planner_node/optimal_list", Marker)
+    @ROSComponent.on_topic("/drone_0_ego_planner_node/optimal_list", Marker)
     def optimal_cb(self, msg):
         cur = time.time()
         if cur - self.send_time < 1:
@@ -1248,7 +1244,7 @@ class Control(CallbackManager, ROSProxy):
             wp_list.append(gps)
         self.ws_pub.publish(json.dumps({"type": "state", "waypoint": wp_list}))
 
-    @ros.topic("/planning/pos_cmd", PositionCommand)
+    @ROSComponent.on_topic("/planning/pos_cmd", PositionCommand)
     def cmd_cb(self, msg):
         if self.runner.node.type != NodeType.WP:
             return
@@ -1263,7 +1259,7 @@ class Control(CallbackManager, ROSProxy):
             yaw=msg.yaw,
         )
 
-    @ros.topic("/mavproxy/landing_target", PoseStamped)
+    @ROSComponent.on_topic("/mavproxy/landing_target", PoseStamped)
     def landing_target_cb(self, msg: PoseStamped):
         quat = msg.pose.orientation
         _, _, yaw = tf.transformations.euler_from_quaternion(
@@ -1276,11 +1272,11 @@ class Control(CallbackManager, ROSProxy):
             yaw,
         )
 
-    @ros.topic("/mavros/distance_sensor/rangefinder_pub", Range)
+    @ROSComponent.on_topic("/mavros/distance_sensor/rangefinder_pub", Range)
     def rangefinder_cb(self, msg: Range):
         self.rangefinder_alt = msg.range
 
-    @http_proxy.get("/get_gpsv2")
+    @HTTP_ProxyComponent.on_get("/get_gpsv2")
     def get_gpsv2(self):
         return SUCCESS_RESPONSE(
             {
@@ -1294,7 +1290,7 @@ class Control(CallbackManager, ROSProxy):
             }
         )
 
-    @http_proxy.post("/set_posvel")
+    @HTTP_ProxyComponent.on_post("/set_posvel")
     def set_pos_vel(self, data: SetPosVelModel):
         """
         编队位置-速度控制接口（/set_posvel）
@@ -1338,13 +1334,13 @@ class Control(CallbackManager, ROSProxy):
             self.runner.step(NodeType.POSVEL_MOVE)
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/stop_follow")
+    @HTTP_ProxyComponent.on_post("/stop_follow")
     def stop_follow(self):
         self.stop_planner()  # 关闭避障
         self.runner.trigger(CEventType.STOP_FOLLOW)
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/set_waypoint")
+    @HTTP_ProxyComponent.on_post("/set_waypoint")
     def set_waypoint(self, data: SetWaypointModel):
         if self.runner.node.type == NodeType.INIT:
             return ERROR_RESPONSE("初始化中!")
@@ -1359,16 +1355,16 @@ class Control(CallbackManager, ROSProxy):
         )
         return SUCCESS_RESPONSE()
 
-    @http_proxy.get("/get_waypoint")
+    @HTTP_ProxyComponent.on_get("/get_waypoint")
     def get_waypoint(self):
         return SUCCESS_RESPONSE(self._wp_raw)
 
-    @http_proxy.post("/set_mode")
+    @HTTP_ProxyComponent.on_post("/set_mode")
     def route_set_mode(self, data: SetModeModel):
         self.set_mode_service(0, data.mode)
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/land")
+    @HTTP_ProxyComponent.on_post("/land")
     def route_land(self, data: SetWaypointModel):
         if data.waypoint is None or len(data.waypoint) == 0:
             self.runner.trigger(CEventType.SET_LAND)
@@ -1379,13 +1375,13 @@ class Control(CallbackManager, ROSProxy):
 
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/return")
+    @HTTP_ProxyComponent.on_post("/return")
     def route_return(self, data: SetWaypointModel):
         data.rtl = True
         data.land = False
         return self.set_waypoint(data)
 
-    @http_proxy.post("/takeoff")
+    @HTTP_ProxyComponent.on_post("/takeoff")
     def takeoff(self, data: TakeoffModel):
         if self.runner.node.type == NodeType.INIT:
             return ERROR_RESPONSE("初始化中, 无法起飞!")
@@ -1394,26 +1390,26 @@ class Control(CallbackManager, ROSProxy):
         self.runner.step(NodeType.TAKING_OFF)
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/loiter")
+    @HTTP_ProxyComponent.on_post("/loiter")
     def loiter(self):
         if self.runner.node.type not in [NodeType.INIT, NodeType.GROUND]:
             self.runner.step(NodeType.HOVER)
         self.control.loiter()
         return SUCCESS_RESPONSE()
 
-    @http_proxy.get("/get_gps")
+    @HTTP_ProxyComponent.on_get("/get_gps")
     def get_gps(self):
         rel_alt = 0 if self.rel_alt is None else self.rel_alt
         yaw = 0 if self.yaw is None else self.yaw
         return {"msg": [self.lon, self.lat, rel_alt, yaw], "status": "success"}
 
-    @http_proxy.post("/stop_planner")
+    @HTTP_ProxyComponent.on_post("/stop_planner")
     def stop_planner(self):
         self.planner_enable = False
         self.ws_pub.publish(json.dumps({"type": "state", "planner": self.planner_desc}))
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/start_planner")
+    @HTTP_ProxyComponent.on_post("/start_planner")
     def start_planner(self, auto=False):
         if auto and not self.auto_planner_enable:
             return SUCCESS_RESPONSE("planner_enable=False时不允许自动打开避障")
@@ -1422,32 +1418,32 @@ class Control(CallbackManager, ROSProxy):
         self.ws_pub.publish(json.dumps({"type": "state", "planner": self.planner_desc}))
         return SUCCESS_RESPONSE()
 
-    @http_proxy.get("/get_planner")
+    @HTTP_ProxyComponent.on_get("/get_planner")
     def get_planner(self):
         return SUCCESS_RESPONSE(msg=self.planner_enable)
 
-    @http_proxy.get("/get_pland")
+    @HTTP_ProxyComponent.on_get("/get_pland")
     def get_pland(self):
         return SUCCESS_RESPONSE(msg=self.pland_enable)
 
-    @http_proxy.post("/stop_pland")
+    @HTTP_ProxyComponent.on_post("/stop_pland")
     def stop_pland(self):
         self.pland_enable = False
         self.ws_pub.publish(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/start_pland")
+    @HTTP_ProxyComponent.on_post("/start_pland")
     def start_pland(self):
         self.pland_enable = True
         self.ws_pub.publish(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/arm")
+    @HTTP_ProxyComponent.on_post("/arm")
     def do_arm(self):
         self._do_arm()
         return SUCCESS_RESPONSE()
 
-    @http_proxy.get("/prearms")
+    @HTTP_ProxyComponent.on_get("/prearms")
     def prearm(self):
         if not self.control.is_prearm_enable():
             try:
@@ -1486,7 +1482,7 @@ class Control(CallbackManager, ROSProxy):
 
         return SUCCESS_RESPONSE({"arm": False, "reason": "wait for reason timeout"})
 
-    @http_proxy.post("/set_joystick")
+    @HTTP_ProxyComponent.on_post("/set_joystick")
     def set_joystick(self, data: JoystickModel):
         """
         left_x: X轴速度（-1~1，正向前）
@@ -1497,7 +1493,7 @@ class Control(CallbackManager, ROSProxy):
         self.control.set_joystick(data.left_x, data.left_y, data.right_x, data.right_y)
         return SUCCESS_RESPONSE()
 
-    @http_proxy.post("/reboot_fcu")
+    @HTTP_ProxyComponent.on_post("/reboot_fcu")
     def reboot_fcu(self):
         rospy.wait_for_service("/mavros/cmd/command", timeout=4)
         cmd_service = rospy.ServiceProxy("/mavros/cmd/command", CommandLong)
@@ -1517,5 +1513,7 @@ class Control(CallbackManager, ROSProxy):
 if __name__ == "__main__":
     rospy_init_node("control")
     # wait_for_debugger()
-    control_node = Control()
+    ros_node = ROSComponent()
+    http_node = HTTP_ProxyComponent()
+    control_node = Control(ros_node, http_node)
     rospy.spin()

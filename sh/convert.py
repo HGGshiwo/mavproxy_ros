@@ -41,7 +41,5 @@ def callback(msg):
 if __name__ == "__main__":
     rospy.init_node("simple_odom_publisher")
     pub = rospy.Publisher("odom", nav_msgs.msg.Odometry, queue_size=10)
-    rospy.Subscriber(
-        "/planning/pos_cmd", PositionCommand, callback
-    )  # 替换YourMessageType
+    rospy.Subscriber("/planning/pos_cmd", PositionCommand, callback)
     rospy.spin()

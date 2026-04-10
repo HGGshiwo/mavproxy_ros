@@ -5,12 +5,12 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
 
 import rospkg
 import rospy
-from event_callback import http_proxy, ros
-from event_callback.core import CallbackManager
+from event_callback.components.http import HTTP_ProxyComponent
+from event_callback.components.ros import ROSComponent
+from event_callback.core import BaseManager
 from event_callback.ros_utils import rospy_init_node
 from event_callback.utils import setup_logger
 from mavros_msgs.msg import Param, ParamValue
@@ -33,10 +33,10 @@ def parse_param(param):
     return 0
 
 
-class Param(CallbackManager):
+class Param(BaseManager):
 
     def __init__(self):
-        super().__init__()
+        super().__init__(ROSComponent(), HTTP_ProxyComponent())
         rospy.wait_for_service("/mavros/param/pull")
         rospy.wait_for_service("/mavros/param/get")
         rospy.wait_for_service("/mavros/param/set")
@@ -106,16 +106,16 @@ class Param(CallbackManager):
             logger.error(f"服务调用失败: {e}")
             return False
 
-    @ros.topic("/mavros/param/param_value", Param)
+    @ROSComponent.on_topic("/mavros/param/param_value", Param)
     def param_callback(self, msg: Param):
         """监听参数变化并写入 ROS param"""
         param_name = msg.param_id
         param_value = msg.value.integer if msg.value.integer != 0 else msg.value.real
         # 将参数写入 ROS param，路径为 /mavros/param/参数名
         rospy.set_param(f"/mavros/param/{param_name}", param_value)
-        logger.info(f"同步飞控参数 {param_name} = {param_value} 到 ROS param")
+        # logger.info(f"同步飞控参数 {param_name} = {param_value} 到 ROS param")
 
-    @http_proxy.post("/set_param")
+    @HTTP_ProxyComponent.on_post("/set_param")
     def set_param(self, data: SetParamModel):
         out = {}
         for name, value in data.param.items():
@@ -123,7 +123,7 @@ class Param(CallbackManager):
             out[name] = "参数设置成功!" if res else "参数设置失败"
         return SUCCESS_RESPONSE("\n".join([f"{k}: {v}" for k, v in out.items()]))
 
-    @http_proxy.get("/params")
+    @HTTP_ProxyComponent.on_get("/params")
     def get_params(self):
         params = rospy.get_param(("/mavros/param"))
         data = []

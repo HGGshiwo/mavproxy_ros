@@ -12,7 +12,8 @@ import rospy
 import tf.transformations as tft
 from cv_bridge import CvBridge
 from event_callback import ros
-from event_callback.core import CallbackManager, CallbackMixin
+from event_callback.components.ros import ROSComponent
+from event_callback.core import BaseManager, CallbackManager, CallbackMixin
 from event_callback.ros_utils import (
     ROSProxy,
     rosparam_field,
@@ -31,14 +32,9 @@ logger = logging.getLogger(__name__)
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 
-class Pland(CallbackManager, ROSProxy):
-
-    def __init__(
-        self,
-        component_config: Optional[Dict[str, Any]] = None,
-        mixins: List[CallbackMixin] = None,
-    ):
-        super().__init__(component_config, mixins)
+class Pland(BaseManager, ROSProxy):
+    def __init__(self):
+        super().__init__(ROSComponent())
         self.bridge = CvBridge()
         self.fps_helper = FPSHelper(fps=1)
         self.camera_fov_xy = None
@@ -283,7 +279,7 @@ class Pland(CallbackManager, ROSProxy):
         self.detect_res_pub.publish(res)
 
     # topic 在launch中修改
-    @ros.topic("/pland_camera/image_raw", Image)
+    @ROSComponent.on_topic("/pland_camera/image_raw", Image)
     def pland_cb(self, frame: Image):
         try:
             frame = self.bridge.imgmsg_to_cv2(frame, desired_encoding="bgr8")
@@ -294,7 +290,7 @@ class Pland(CallbackManager, ROSProxy):
 
             traceback.print_exc()
 
-    @ros.topic("/pland_camera/compressed", CompressedImage)
+    @ROSComponent.on_topic("/pland_camera/compressed", CompressedImage)
     def pland_cb2(self, frame: CompressedImage):
         try:
             frame = self.bridge.compressed_imgmsg_to_cv2(frame, desired_encoding="bgr8")
@@ -306,7 +302,7 @@ class Pland(CallbackManager, ROSProxy):
             traceback.print_exc()
 
 
-# @ros.topic("/UAV0/sensor/video11_camera/cam_info", CameraInfo)
+# @ROSComponent.on_topic("/UAV0/sensor/video11_camera/cam_info", CameraInfo)
 # def camera_info_cb(self, camera_info_msg: CameraInfo):
 #     """
 #     从camera_info消息计算水平和垂直FOV（单位：度）
