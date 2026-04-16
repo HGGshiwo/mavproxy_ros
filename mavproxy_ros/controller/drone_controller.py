@@ -83,7 +83,7 @@ class DroneController(BaseController):
         # 坐标系选择
         target.coordinate_frame = frame
         type_mask = 0
-        ctrl_data = []
+
         if p is None:
             for key in ["PX", "PY", "PZ"]:
                 type_mask = type_mask | getattr(PositionTarget, f"IGNORE_{key}")

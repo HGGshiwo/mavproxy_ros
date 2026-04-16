@@ -17,7 +17,7 @@ from mavros_msgs.msg import Param, ParamValue
 from mavros_msgs.srv import ParamPull, ParamSet
 
 from mavproxy_ros.control_model import *
-from mavproxy_ros.node import ERROR_RESPONSE, SUCCESS_RESPONSE
+from mavproxy_ros.utils import ERROR_RESPONSE, SUCCESS_RESPONSE
 
 logger = logging.getLogger(__name__)
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())

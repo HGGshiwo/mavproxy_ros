@@ -31,13 +31,21 @@ class Connection(BaseManager):
     def __init__(self, ros_comp: ROSComponent, http_comp: HTTPComponent):
         super().__init__(ros_comp, http_comp)
         self.http_comp = http_comp
+        self.init_connection()
+
+        http_comp.start_server(port=8000)
+
+    def init_connection(self):
         self.armed = None  # 是否解锁
         self.handler_map = {}
         self.handler_lock = threading.Lock()
-        http_comp.start_server(port=8000)
         self.ws_sub = rospy.Subscriber("/mavproxy/ws", String, self._ws_callback)
         logger.info("HTTPComponent create ROS topic: do_register")
         self._set_rate()
+
+    @ROSComponent.on_topic("restart", String)
+    def on_restart(self, data):
+        self.init_connection()
 
     def _publish(self, data, msg_type: MessageType):
         handler_type: Type[MessageHandler] = msg_type.value

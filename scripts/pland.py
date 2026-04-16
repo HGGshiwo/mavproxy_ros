@@ -14,12 +14,7 @@ from cv_bridge import CvBridge
 from event_callback import ros
 from event_callback.components.ros import ROSComponent
 from event_callback.core import BaseManager, CallbackManager, CallbackMixin
-from event_callback.ros_utils import (
-    ROSProxy,
-    rosparam_field,
-    rospy_init_node,
-    rostopic_field,
-)
+from event_callback.ros_utils import rospy_init_node, rostopic_field
 from event_callback.utils import setup_logger
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav_msgs.msg import Odometry
@@ -32,7 +27,24 @@ logger = logging.getLogger(__name__)
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 
 
-class Pland(BaseManager, ROSProxy):
+def get_matrix(msg: CameraInfo):
+    """计算相机矩阵的逆"""
+    K = np.array(msg.K).reshape((3, 3))
+    K_inv = np.linalg.inv(K)
+    return (K, K_inv)
+
+
+class Pland(BaseManager):
+    odom: Odometry = rostopic_field(
+        "/mavros/local_position/odom", Odometry, timeout=0.1
+    )
+    camera_info = rostopic_field(
+        "/UAV0/sensor/video11_camera/cam_info",
+        CameraInfo,
+        timeout=None,
+        format=get_matrix,
+    )
+
     def __init__(self):
         super().__init__(ROSComponent())
         self.bridge = CvBridge()
@@ -40,18 +52,10 @@ class Pland(BaseManager, ROSProxy):
         self.camera_fov_xy = None
         self.info_lock = threading.Lock()
         self.detect_lock = threading.Lock()
-        self.tag_id = rosparam_field("~tag_id", 0)
-        self.tag_type = rosparam_field("~tag_type", "tagCustom48h12")
+        self.tag_id = rospy.get_param("~tag_id", 0)
+        self.tag_type = rospy.get_param("~tag_type", "tagCustom48h12")
         self.detector = self._create_detector()
-        self.odom: Odometry = rostopic_field(
-            "/mavros/local_position/odom", Odometry, timeout=0.1
-        )
-        self.camera_info = rostopic_field(
-            "/UAV0/sensor/video11_camera/cam_info",
-            CameraInfo,
-            timeout=None,
-            format=self._get_matrix,
-        )
+
         # fmt: off
         self.landing_target_pub = rospy.Publisher(
             "/mavproxy/landing_target", PoseStamped, queue_size=10
@@ -116,12 +120,6 @@ class Pland(BaseManager, ROSProxy):
             yaw += 2 * np.pi
         delta = (calib_qr_center - img_center) / (2 * img_center)
         return delta[0, 0], delta[0, 1], yaw
-
-    def _get_matrix(self, msg: CameraInfo):
-        """计算相机矩阵的逆"""
-        K = np.array(msg.K).reshape((3, 3))
-        K_inv = np.linalg.inv(K)
-        return (K, K_inv)
 
     def _draw_result(self, frame: npt.NDArray, tag: Detection):
         frame = frame.copy()

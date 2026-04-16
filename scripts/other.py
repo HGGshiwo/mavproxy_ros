@@ -13,8 +13,7 @@ from rsos_msgs.srv import SetGimbalAngle, StartBagRecord
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from mavproxy_ros.node import ERROR_RESPONSE, SUCCESS_RESPONSE
-from mavproxy_ros.utils import post_json
+from mavproxy_ros.utils import ERROR_RESPONSE, SUCCESS_RESPONSE, post_json
 
 try:
     from rsos_msgs.srv import SetCameraExposure
