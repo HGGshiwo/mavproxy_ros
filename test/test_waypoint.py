@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding=utf-8
+import math
 import random
 import unittest
 
@@ -11,7 +12,19 @@ from mavproxy_ros.test.test_helper import TestHelper, sitl_env
 from mavproxy_ros.test.utils import gps_distance
 
 MODEL_NAME = "iris_demo"
-DISTANCE_THRESHOLD = 3.0  # 目标的距离阈值
+XY_THRESHOLD = 2.5  # 目标的距离阈值
+Z_THRESHOLD = 1.2  # 高度的距离阈值
+
+test_waypoint = [
+    [120.14099425554586, 30.111834585498475, 10],
+    [120.14089461794015, 30.111973425562567, 3],
+    [120.1409098335351, 30.112108444153343, 40],
+    [120.14101732435114, 30.112202702305442, 5],
+    [120.14111941608508, 30.11227445732493, 10],
+    [120.1409432096789, 30.112290166996786, 6],
+    [120.14080283354473, 30.11221289237057, 10],
+    [120.1408582968425, 30.112159394516993, 7],
+]
 
 
 class TestWaypoint(unittest.TestCase):
@@ -37,16 +50,8 @@ class TestWaypoint(unittest.TestCase):
             self.helper.init()
             self.helper.takeoff()
             self.helper.http_post("/stop_pland")
-            test_waypoint = [
-                [120.14099425554586, 30.111834585498475, 10],
-                [120.14089461794015, 30.111973425562567, 3],
-                [120.1409098335351, 30.112108444153343, 40],
-                [120.14101732435114, 30.112202702305442, 5],
-                [120.14111941608508, 30.11227445732493, 10],
-                [120.1409432096789, 30.112290166996786, 6],
-                [120.14080283354473, 30.11221289237057, 10],
-                [120.1408582968425, 30.112159394516993, 7],
-            ]
+            self.helper.http_post("/stop_planner")
+
             res = self.helper.http_post("/set_waypoint", dict(waypoint=test_waypoint))
             assert res["status"] == "success", res
             home_lat = self.helper.state["lat"]
@@ -64,7 +69,10 @@ class TestWaypoint(unittest.TestCase):
                 lat = self.helper.state["lat"]
                 lon = self.helper.state["lon"]
                 dist = gps_distance(lon, lat, wp[0], wp[1])
-                assert dist < DISTANCE_THRESHOLD, f"dist: {dist}, wp:[{wp[0]}, {wp[1]}]"
+                dist_z = math.fabs(self.helper.state["rel_alt"] - wp[2])
+                assert dist < XY_THRESHOLD, f"dist: {dist}, wp:[{wp[0]}, {wp[1]}]"
+                assert dist_z < Z_THRESHOLD, f"z: {dist_z}"
+
             self.helper.wait_for_state("state", "悬停状态", 120)
             self.helper.http_post("/return")
             self.helper.wait_for_state("state", "地面状态", 120)

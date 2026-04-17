@@ -257,7 +257,7 @@ class TestHelper(BaseManager):
         rospy.loginfo("wait for 地面状态")
         self.wait_for_state("state", "地面状态", 1000)
 
-    def takeoff(self):
+    def takeoff(self, waypoint=None):
         rospy.loginfo("起飞状态检查")
         for j in range(10):
             for i in range(100):
@@ -273,14 +273,20 @@ class TestHelper(BaseManager):
                     continue
 
                 rospy.loginfo(f"起飞检查通过，尝试第{j+1}/10次起飞")
-                out = self.http_post("/takeoff", data=dict(alt=5))
+                if waypoint is None:
+                    out = self.http_post("/takeoff", data=dict(alt=5))
+                    target_state = "悬停状态"
+                else:
+                    out = self.http_post("/set_waypoint", data=dict(waypoint=waypoint))
+                    target_state = "航点模式"
                 if out["status"] == "success":
                     rospy.loginfo("起飞成功！")
-                    rospy.loginfo("wait for 悬停状态")
-                    self.wait_for_state("state", "悬停状态", 1000)
+                    rospy.loginfo(f"wait for {target_state}")
+                    self.wait_for_state("state", target_state, 1000)
                     return
                 else:
                     rospy.loginfo(f"起飞失败，{out['msg']}")
+                    break
 
         raise RuntimeError("Prearm timeout!")
 

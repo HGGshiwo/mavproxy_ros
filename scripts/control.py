@@ -23,7 +23,7 @@ import math
 import threading
 import time
 from enum import Enum
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 import rospy
@@ -40,10 +40,10 @@ from quadrotor_msgs.msg import PositionCommand
 from rsos_msgs.msg import PointObj
 from sensor_msgs.msg import NavSatFix, Range
 from std_msgs.msg import Empty, Float64, String
+from std_srvs.srv import Trigger, TriggerRequest
 from visualization_msgs.msg import Marker
 
 from mavproxy_ros.control_model import *
-from mavproxy_ros.pid_controller import PIDController
 from mavproxy_ros.utils import (
     ERROR_RESPONSE,
     SUCCESS_RESPONSE,
@@ -58,12 +58,7 @@ LIFTING_TIMEOUT = 3  # 调整高度卡死超时(s)：周期内高度/偏航变�
 LIFTING_STALL_THRESHOLD = 0.1
 YAW_TOLERANCE = 0.1  # 航向对齐容差(rad)，用于 LiftingNode 和 PosVelYawNode
 POSVEL_ARRIVE_DISTANCE = 0.5  # posvel 到达目标点的判定距离(m)
-MAX_X_SPEED = 0.5  # 精准降落最大横向速度(m/s)
-MAX_Y_SPEED = 0.5  # 精准降落最大横向速度(m/s)
-MAX_Z_SPEED = 1  # 精准降落最大垂直速度(m/s)
-PLAND_ALT_THRESHOLD = 0.2  # 精准降落触地判定高度(m)，低于此值执行 do_land
-PLAND_CENTER_THRESHOLD = 0.1  # 精准降落允许下降的最大中心误差(m)
-PLAND_TARGET_TIMEOUT = 0.05  # 精准降落目标数据超时阈值(s)，超时则忽略该帧
+
 
 setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
 logger = logging.getLogger(__name__)
@@ -202,6 +197,8 @@ class Control(BaseManager):
         )
         self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
         self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
+        self.pland_start_srv = rospy.ServiceProxy("/pland/start", Trigger)
+        self.pland_stop_srv = rospy.ServiceProxy("/pland/stop", Trigger)
         self.target_pub = rospy.Publisher(
             "/UAV0/perception/object_location/obj_lla", PointStamped, queue_size=1
         )
@@ -469,109 +466,22 @@ class Control(BaseManager):
     def land_state_enter(self):
         """
         降落状态：执行降落动作，支持普通降落和精准降落两种模式。
-
-        普通降落（pland_enable=False）：
-        - enter 时直接调用 do_land，交由飞控自主降落。
-
-        精准降落（pland_enable=True）：
-        - 依赖 /mavproxy/landing_target 提供目标相对位置和偏航误差。
-        - 中心误差 < PLAND_CENTER_THRESHOLD 时才允许下降（vz < 0）。
-        - 测距仪高度 < PLAND_ALT_THRESHOLD 时视为已触地，调用 do_land → GROUND。
-        - 目标数据超时（> PLAND_TARGET_TIMEOUT）则停止控制输出，等待新数据。
-        - 遥控器有输入时优先响应遥控器速度，覆盖视觉控制。
-
-
         """
-        super().__init__(NodeType.LANDING)
-        self.pid_x_controller = PIDController(
-            1, 0.005, 0.01, setpoint=0, output_min=-MAX_X_SPEED, output_max=MAX_X_SPEED
-        )
-        self.pid_y_controller = PIDController(
-            1, 0.005, 0.01, setpoint=0, output_min=-MAX_Y_SPEED, output_max=MAX_Y_SPEED
-        )
-        self.pid_yaw_controller = PIDController(
-            1, 0.005, 0.01, setpoint=0, output_min=-1, output_max=1
-        )
-
         post_json("set_gimbal", {"mode": "body", "angle": 90})
-        if not self.pland_enable:
-            self.control.do_land()
         post_json("stop_record")
 
-    def _get_rc_speed(self):
-        if self.rc_channel is None:
-            return None
-
-        stamp, rc_channels = self.rc_channel
-        time_jump = math.fabs((rospy.Time.now() - stamp).to_sec())
-        if time_jump < 0.05:  # 响应遥控器的输入
-            if rc_channels[0] == 1500 and rc_channels[1] == 1500:  # 遥控器无输入
-                return None
-
-            vy = ((rc_channels[0] - 1500) / 500) * MAX_Y_SPEED
-            vy = np.clip(vy, -MAX_Y_SPEED, MAX_Y_SPEED)
-            vx = ((rc_channels[1] - 1500) / 500) * MAX_X_SPEED
-            vx = np.clip(vx, -MAX_X_SPEED, MAX_X_SPEED)
-            return vx, vy, 0, 0
-
-    def _get_landing_speed(self):
-        """F-L-U坐标系下的速度"""
-        landing_target = copy.deepcopy(self.landing_target)
-        timestamp, x, y, yaw = landing_target
-        logger.info(f"yaw: {yaw}")
-        time_jump = math.fabs((rospy.Time.now() - timestamp).to_sec())
-        if time_jump > PLAND_TARGET_TIMEOUT:  # 20hz
-            logger.warning(
-                f"target too old: {time_jump:.3f} > {PLAND_TARGET_TIMEOUT}s, ignore"
-            )
-            return None
-
-        vz = 0
-        z_err = np.sqrt(x * x + y * y)
-        if z_err < PLAND_CENTER_THRESHOLD:  # 误差足够小，允许下降
-            if self.rangefinder_alt is None:
-                logger.warning("no rangefinder data found, ignore")
-                return
-
-            vz = np.clip(-self.rangefinder_alt, -1, 1)
-        stamp = rospy.Time.now().to_sec()
-        rel_alt = np.clip(self.rangefinder_alt, 0.1, 10)
-        # 控制像素中心点靠近目标点
-        vx = -self.pid_x_controller(y * rel_alt, stamp)
-        vy = -self.pid_y_controller(x * rel_alt, stamp)
-        yaw_rate = -self.pid_yaw_controller(yaw, stamp)
-        return vx, vy, vz, yaw_rate
+        if not self.pland_enable:
+            self.control.do_land()
+        else:
+            rospy.wait_for_service("/pland/start", 10)
+            self.pland_start_srv(TriggerRequest())
 
     @LandState.exit()
     def land_state_exit(self):
+        if self.pland_enable:
+            rospy.wait_for_service("/pland/stop", 10)
+            self.pland_stop_srv(TriggerRequest())
         self.do_ws_pub({"type": "event", "event": "disarm"})
-
-    @LandState.idle()
-    def land_state_idle(self):
-        if not self.pland_enable:
-            return
-
-        if (
-            not self.control.is_alt_enable()
-            or self.rangefinder_alt < PLAND_ALT_THRESHOLD
-        ):
-            self.control.do_land()
-            logger.info(f"land done, alt: {self.rangefinder_alt}")
-            self.step(NodeType.GROUND)
-            return
-
-        if self.landing_target is None:
-            return
-
-        v_xyz = self._get_rc_speed()
-        if v_xyz is None:
-            v_xyz = self._get_landing_speed()
-        if v_xyz is None:
-            return
-
-        vx, vy, vz, yaw_rate = v_xyz
-        logger.info(f"plan control: {[vx, vy, vz, yaw_rate]}")
-        self.do_send_cmd(v=[vx, vy, vz], yaw_rate=yaw_rate, frame="body")
 
     @LiftState.enter()
     def lift_state_enter(self):
@@ -778,7 +688,7 @@ class Control(BaseManager):
             # 如果只有一个航点(rtl为0个), 本来是不允许的, 现在额外插入一个
             waypoint.insert(0, [0, 0, 10])
         if self.node_type == NodeType.GROUND:
-            self.takeoff_alt = waypoint[0][-1]
+            self.target_takeoff_alt = waypoint[0][-1]
             next_state = NodeType.TAKING_OFF2
         else:
             next_state = NodeType.LIFTING
@@ -799,7 +709,7 @@ class Control(BaseManager):
     def prearm_check(self):
         if not self.control.is_prearm_enable():
             try:
-                self.do_arm()
+                self.arm_vehicle()
                 return True, ""
 
             except Exception as e:
@@ -922,7 +832,9 @@ class Control(BaseManager):
             goal = PointStamped()
             goal.header.frame_id = "map"
             goal.header.stamp = rospy.Time.now()
-            lon, lat, alt = self.enu2gps([msg.pos.x, msg.pos.y, msg.pos.z])
+            lon, lat, alt = self.state_estimator.enu2gps(
+                [msg.pos.x, msg.pos.y, msg.pos.z]
+            )
             goal.point.x = lon
             goal.point.y = lat
             goal.point.z = alt
@@ -1008,7 +920,7 @@ class Control(BaseManager):
             xyz_list.append([pt.x, pt.y, pt.z])
         wp_list = []
         for xyz in xyz_list:
-            gps = self.enu2gps(xyz)
+            gps = self.state_estimator.enu2gps(xyz)
             wp_list.append(gps)
         self.ws_pub.publish(json.dumps({"type": "state", "waypoint": wp_list}))
 
@@ -1237,7 +1149,7 @@ class Control(BaseManager):
 
     @HTTP_ProxyComponent.on_post("/arm")
     def on_post_arm(self):
-        self._do_arm()
+        self.arm_vehicle()
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_get("/prearms")
