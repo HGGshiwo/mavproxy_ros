@@ -24,7 +24,6 @@ test_waypoint = [
     [120.14080283354473, 30.11221289237057, 10],
     [120.1408582968425, 30.112159394516993, 7],
 ]
-MODEL_NAME_MAP = {"dog": "/", "drone": "iris_demo"}
 
 
 class TestWaypoint(unittest.TestCase):
@@ -32,7 +31,6 @@ class TestWaypoint(unittest.TestCase):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
         self.helper = TestHelper()
-        self.robot_type = rospy.get_param("~robot_type")
 
     def tearDown(self):
         pass
@@ -47,10 +45,8 @@ class TestWaypoint(unittest.TestCase):
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
 
-        self.helper.set_state(
-            MODEL_NAME_MAP.get(self.robot_type), x=IRIS_X, y=IRIS_Y, z=0.2
-        )
-        with sitl_env(self.robot_type):
+        self.helper.set_robot_state(x=IRIS_X, y=IRIS_Y, z=0.2)
+        with self.helper.sitl_env():
             pub.publish("restart")
             self.helper.init()
             self.helper.takeoff()
@@ -79,7 +75,7 @@ class TestWaypoint(unittest.TestCase):
                 lon = self.helper.state["lon"]
                 dist = gps_distance(lon, lat, wp[0], wp[1])
                 assert dist < XY_THRESHOLD, f"dist: {dist}, wp:[{wp[0]}, {wp[1]}]"
-                if self.robot_type == "drone":
+                if self.helper.robot_type == "drone":
                     dist_z = math.fabs(self.helper.state["rel_alt"] - wp[2])
                     assert dist_z < Z_THRESHOLD, f"z: {dist_z}"
 

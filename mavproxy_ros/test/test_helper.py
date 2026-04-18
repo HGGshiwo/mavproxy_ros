@@ -102,6 +102,9 @@ def sitl_env(robot_type: str = "drone"):
             session_cleanup()
 
 
+MODEL_NAME_MAP = {"dog": "/", "drone": "iris_demo"}
+
+
 class TestHelper(BaseManager):
     def __init__(self):
         super().__init__(ROSComponent())
@@ -121,6 +124,7 @@ class TestHelper(BaseManager):
         self.set_state_service = rospy.ServiceProxy(
             "/gazebo/set_model_state", SetModelState
         )
+        self.robot_type = rospy.get_param("~robot_type")
 
     async def connect_websocket(self):
         # 替换为你需要连接的WebSocket地址
@@ -182,6 +186,20 @@ class TestHelper(BaseManager):
         ]
         (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(orientation_list)
         return (pos_x, pos_y, pos_z), (vel_x, vel_y, vel_z), (roll, pitch, yaw)
+
+    def set_robot_state(
+        self,
+        x: float = 0,
+        y: float = 0,
+        z: float = 0,
+        roll: float = 0,
+        pitch: float = 0,
+        yaw: float = 0,
+    ):
+        self.set_state(MODEL_NAME_MAP.get(self.robot_type), x, y, z, roll, pitch, yaw)
+
+    def sitl_env(self):
+        return sitl_env(self.robot_type)
 
     def set_state(
         self,

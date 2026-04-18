@@ -61,8 +61,9 @@ class TestPosvel(unittest.TestCase):
 
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
-        self.helper.set_state(MODEL_NAME, x=IRIS_X, y=IRIS_Y, z=0.2)
-        with sitl_env():
+        self.helper.set_robot_state(x=IRIS_X, y=IRIS_Y, z=0.2)
+
+        with self.helper.sitl_env():
             pub.publish("restart")
             self.helper.init()
             self.helper.http_post("/stop_pland")
