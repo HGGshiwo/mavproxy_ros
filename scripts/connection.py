@@ -39,7 +39,9 @@ class Connection(BaseManager):
         self.armed = None  # 是否解锁
         self.handler_map = {}
         self.handler_lock = threading.Lock()
-        self.ws_sub = rospy.Subscriber("/mavproxy/ws", String, self._ws_callback)
+        self.ws_sub = rospy.Subscriber(
+            "/mavproxy/ws", String, self._ws_callback, queue_size=100
+        )
         logger.info("HTTPComponent create ROS topic: do_register")
         self._set_rate()
 

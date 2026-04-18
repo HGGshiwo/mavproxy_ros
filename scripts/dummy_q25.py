@@ -110,7 +110,7 @@ class Q25RobotState:
             try:
                 if cmd_type == CommandType.MANUAL_HEARTBEAT:
                     self.update_heartbeat()
-                    rospy.loginfo("❤️  收到心跳指令，维持连接")
+                    # rospy.loginfo("❤️  收到心跳指令，维持连接")
                     return True, None
 
                 elif cmd_type == CommandType.EMERGENCY_STOP:

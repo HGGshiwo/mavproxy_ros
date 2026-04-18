@@ -23,7 +23,7 @@ import math
 import threading
 import time
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Literal, Tuple
 
 import numpy as np
 import rospy
@@ -192,14 +192,16 @@ class Control(BaseManager):
         self.arm_service = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
         self.set_mode_service = rospy.ServiceProxy("/mavros/set_mode", SetMode)
         self.cmd_service = rospy.ServiceProxy("/mavros/cmd/command", CommandLong)
-        self.wp_pub = rospy.Publisher(
+        self.wp_pub = ROSComponent.create_publisher(
             "/move_base_simple/goal2", PoseStamped, queue_size=-1
         )
-        self.ws_pub = rospy.Publisher("ws", String, queue_size=-1)
-        self.stop_pub = rospy.Publisher("/egoplanner/stopplan", Empty, queue_size=-1)
+        self.ws_pub = ROSComponent.create_publisher("ws", String, queue_size=-1)
+        self.stop_pub = ROSComponent.create_publisher(
+            "/egoplanner/stopplan", Empty, queue_size=-1
+        )
         self.pland_start_srv = rospy.ServiceProxy("/pland/start", Trigger)
         self.pland_stop_srv = rospy.ServiceProxy("/pland/stop", Trigger)
-        self.target_pub = rospy.Publisher(
+        self.target_pub = ROSComponent.create_publisher(
             "/UAV0/perception/object_location/obj_lla", PointStamped, queue_size=1
         )
 
@@ -250,15 +252,16 @@ class Control(BaseManager):
     def step(self, node_type: NodeType):
         prev = self.node_type
         cur = node_type
-        logger.info(f"STATE: {prev} -> {cur}")
         if hasattr(self, "control"):
             self.control.state_change(prev, cur)
         prev_node = self.state_map.get(prev)
         prev_node.block_trigger("exit", {})
         cur_node = self.state_map.get(cur)
-        self.node_type = cur
         cur_node.block_trigger("enter", {})
-        self.ws_pub.publish(json.dumps({"type": "state", "state": cur.value[0]}))
+        self.node_type = cur
+        self.ws_pub(json.dumps({"type": "state", "state": cur.value[0]}))
+        time.sleep(0.01)
+        logger.info(f"STATE: {prev} -> {cur}")
 
     @property
     def planner_desc(self):
@@ -277,7 +280,7 @@ class Control(BaseManager):
             return NodeType.GROUND
 
     def do_ws_pub(self, data: dict):
-        self.ws_pub.publish(json.dumps(data))
+        self.ws_pub(json.dumps(data))
 
     def enu_xy2yaw(self, diff_x, diff_y):
         """注意, yaw正东为0度,逆时针为正!"""
@@ -317,6 +320,8 @@ class Control(BaseManager):
         正数和负数明确表示了相对方向（比如正为左，负为右）
         """
         # 直接求差值
+        if not self.state_estimator.odom_ok:
+            return False
         diff = yaw_enu - self.state_estimator.enu_yaw
 
         # 利用 atan2(sin, cos) 魔法将其完美映射到 [-pi, pi] 的最短路径
@@ -334,7 +339,7 @@ class Control(BaseManager):
             self.state_estimator.enu_z,
         ]
         dis = self.control.check_arrive(cur_pos, goal)
-        self.ws_pub.publish(json.dumps({"type": "state", "dis": f"{dis:.2f}"}))
+        self.ws_pub(json.dumps({"type": "state", "dis": f"{dis:.2f}"}))
         return dis < tolerance
 
     def gps_target2goal(self, gps):
@@ -357,9 +362,10 @@ class Control(BaseManager):
         return goal
 
     def arm_vehicle(self, timeout=10):
-        arm, reason = self.prearm_check()
-        if not arm:
-            raise RuntimeError(reason)
+        if self.control.is_prearm_enable():
+            arm, reason = self.prearm_check()
+            if not arm:
+                raise RuntimeError(reason)
         start_time = time.time()
         self.state = ""
         self.arm_service(True)
@@ -393,7 +399,7 @@ class Control(BaseManager):
     @Takeoff2State.enter()
     @TakeoffState.enter()
     def takeoff_enter(self):
-        self.set_mode_service(0, "GUIDED")
+        self.set_mode("GUIDED")
         alt = self.target_takeoff_alt
         # 已经起飞则退化为调整高度
         if self.check_hover():
@@ -444,9 +450,9 @@ class Control(BaseManager):
         self.goal = [px, py, pz]
         logger.info(f"wp target: {[px, py, pz]}")
         if self.planner_enable:
-            self.wp_pub.publish(goal)
+            self.wp_pub(goal)
         else:
-            self.stop_pub.publish(Empty())
+            self.stop_pub(Empty())
             self.do_send_cmd(p=[px, py, pz])
         if self.nodeEventList is not None:
             event_list = self.nodeEventList[self.wp_idx]
@@ -464,7 +470,7 @@ class Control(BaseManager):
 
     @WaypointState.exit()
     def waypoint_state_exit(self):
-        self.stop_pub.publish(Empty())
+        self.stop_pub(Empty())
 
     @HoverState.idle()
     def hover_state_idle(self):
@@ -510,10 +516,10 @@ class Control(BaseManager):
     def lift_state_idle(self):
         vz = np.clip(self.lift_alt - self.rel_alt, -1, 1)
         self.do_send_cmd(v=[0, 0, vz], yaw=self.lift_yaw)
-        yaw_diff = self.check_yaw(self.lift_yaw)
+        yaw_diff: float | Literal[False] = self.check_yaw(self.lift_yaw)
         alt_diff = math.fabs(self.rel_alt - self.lift_alt)
         alt_diff = alt_diff if self.control.is_alt_enable() else 0
-        self.ws_pub.publish(
+        self.ws_pub(
             json.dumps(
                 {
                     "type": "state",
@@ -651,7 +657,7 @@ class Control(BaseManager):
             try:
                 angle = float(angle)
             except Exception:
-                self.ws_pub.publish(
+                self.ws_pub(
                     json.dumps(
                         {"type": "error", "error": f"参数: {angle} 无法转为数字!"}
                     )
@@ -660,6 +666,17 @@ class Control(BaseManager):
 
             data = {"mode": "body", "angle": angle}
         post_json(url, data)
+
+    def set_mode(self, mode: str):
+        res = self.set_mode_service(0, "GUIDED")
+        if not res.mode_sent:
+            raise RuntimeError("模式设置出错, mode_sent返回False!")
+        for i in range(50):
+            if self.mode == mode:
+                rospy.loginfo(f"模式成功切换至: {mode}")
+                return
+        else:
+            raise TimeoutError(f"模式设置:{mode}超时！")
 
     def set_wp_cb(
         self, waypoint, nodeEventList=None, speed=None, land=False, rtl=False
@@ -677,7 +694,7 @@ class Control(BaseManager):
         else:
             next_state = NodeType.LIFTING
         # set_wp start
-        logger.info(f"set wp return: {rtl} wp: {waypoint}")
+        logger.info(f"set wp rtl: {rtl} land: {land} wp: {waypoint}")
         self.land = land or rtl
         self.nodeEventList = nodeEventList
         if rtl:
@@ -686,7 +703,7 @@ class Control(BaseManager):
         self.waypoint = waypoint[1:]
         self.wp_idx = 0
         # set_wp done
-        self.set_mode_service(0, "GUIDED")
+        self.set_mode("GUIDED")
         self.do_pub_wp(waypoint[0:1] + self.waypoint, land or rtl)
         self.step(next_state)
 
@@ -730,16 +747,16 @@ class Control(BaseManager):
 
     def waypoint_finish(self):
         if not self.land:  # 非降落/返航情况下，发布进度
-            self.do_ws_pub(
-                {
-                    "type": "event",
-                    "event": "progress",
-                    "cur": self.wp_idx + 1,  # wp_idx是到达点的前一个点
-                    "total": len(self.waypoint),
-                }
-            )
+            data = {
+                "type": "event",
+                "event": "progress",
+                "cur": self.wp_idx + 1,  # wp_idx是到达点的前一个点
+                "total": len(self.waypoint),
+            }
+            self.do_ws_pub(data)
+            rospy.logerr(f"do_ws_pub: {data}")
         self.do_ws_pub({"type": "state", "wp_idx": self.wp_idx + 1})
-        logger.info(f"wp done: {self.waypoint[self.wp_idx]}")
+        logger.info(f"wp done: {self.waypoint[self.wp_idx]} land: {self.land}")
         self.wp_idx += 1
         if self.wp_idx >= len(self.waypoint):
             if self.land:
@@ -822,12 +839,12 @@ class Control(BaseManager):
             goal.point.x = lon
             goal.point.y = lat
             goal.point.z = alt
-            self.target_pub.publish(goal)
+            self.target_pub(goal)
         cmd_vel_msg = Twist()
         cmd_vel_msg.linear.x = msg.velocity.x
         cmd_vel_msg.linear.y = msg.velocity.y
         cmd_vel_msg.linear.z = msg.velocity.z
-        self.ws_pub.publish(
+        self.ws_pub(
             json.dumps(
                 {
                     "type": "state",
@@ -875,7 +892,7 @@ class Control(BaseManager):
     @ROSComponent.on_topic("/mavros/ws", String)
     def on_mavros_ws(self, data):
         try:
-            self.ws_pub.publish(data)
+            self.ws_pub(data)
         except json.JSONDecodeError:
             pass
 
@@ -906,7 +923,7 @@ class Control(BaseManager):
         for xyz in xyz_list:
             gps = self.state_estimator.enu2gps(xyz)
             wp_list.append(gps)
-        self.ws_pub.publish(json.dumps({"type": "state", "waypoint": wp_list}))
+        self.ws_pub(json.dumps({"type": "state", "waypoint": wp_list}))
 
     @ROSComponent.on_topic("/planning/pos_cmd", PositionCommand)
     @state_guard(False, False, NodeType.WP)
@@ -1039,8 +1056,8 @@ class Control(BaseManager):
         return SUCCESS_RESPONSE(self._wp_raw)
 
     @HTTP_ProxyComponent.on_post("/set_mode")
-    def route_set_mode(self, data: SetModeModel):
-        self.set_mode_service(0, data.mode)
+    def on_post_set_mode(self, data: SetModeModel):
+        self.set_mode(data.mode)
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_post("/land")
@@ -1093,7 +1110,7 @@ class Control(BaseManager):
     @HTTP_ProxyComponent.on_post("/stop_planner")
     def stop_planner(self):
         self.planner_enable = False
-        self.ws_pub.publish(json.dumps({"type": "state", "planner": self.planner_desc}))
+        self.ws_pub(json.dumps({"type": "state", "planner": self.planner_desc}))
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_post("/start_planner")
@@ -1102,7 +1119,7 @@ class Control(BaseManager):
             return SUCCESS_RESPONSE("planner_enable=False时不允许自动打开避障")
 
         self.planner_enable = True
-        self.ws_pub.publish(json.dumps({"type": "state", "planner": self.planner_desc}))
+        self.ws_pub(json.dumps({"type": "state", "planner": self.planner_desc}))
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_get("/get_planner")
@@ -1116,13 +1133,13 @@ class Control(BaseManager):
     @HTTP_ProxyComponent.on_post("/stop_pland")
     def stop_pland(self):
         self.pland_enable = False
-        self.ws_pub.publish(json.dumps({"type": "state", "pland": self.pland_desc}))
+        self.ws_pub(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_post("/start_pland")
     def start_pland(self):
         self.pland_enable = True
-        self.ws_pub.publish(json.dumps({"type": "state", "pland": self.pland_desc}))
+        self.ws_pub(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_post("/disarm")

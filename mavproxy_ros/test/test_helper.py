@@ -30,7 +30,7 @@ PORT = 8000
 
 
 @contextmanager
-def sitl_env():
+def sitl_env(robot_type: str = "drone"):
     # 1. 核心魔法：生成一个独一无二的 UUID 作为本次启动的“狗牌”
     # 例如：'sitl_test_8f2a1b...'
     session_id = f"sitl_test_{uuid.uuid4().hex[:8]}"
@@ -40,7 +40,15 @@ def sitl_env():
     custom_env = os.environ.copy()
     custom_env["MY_ROS_SITL_SESSION"] = session_id
 
-    cmd = "sim_vehicle.py --no-rebuild --no-mavproxy -v ArduCopter -f gazebo-iris --custom-location=30.1119319,120.140883,0,0".split()
+    robot_type_map = {
+        "drone": ("ArduCopter", "gazebo-iris"),
+        "dog": ("Rover", "gazebo-rover"),
+    }
+    apm_arg = robot_type_map.get(robot_type, None)
+    if apm_arg is None:
+        raise RuntimeError(f"不支持机器人类型：{robot_type}")
+    v, f = apm_arg
+    cmd = f"sim_vehicle.py --no-rebuild --no-mavproxy -v {v} -f {f} --custom-location=30.1119319,120.140883,0,0".split()
 
     # 3. 带着狗牌启动进程
     sitl_process = subprocess.Popen(
@@ -134,10 +142,10 @@ class TestHelper(BaseManager):
                             self.ws_event_queue.put(data)
 
             except websockets.exceptions.ConnectionClosed as e:
-                print(f"连接已关闭: {e}")
+                rospy.logerr(f"连接已关闭: {e}")
             except Exception as e:
-                print(f"发生错误: {e}")
-                print(msg)
+                rospy.logerr(f"发生错误: {e}")
+                rospy.logerr(msg)
             time.sleep(1)
             self.ws_open.clear()
 
@@ -230,6 +238,7 @@ class TestHelper(BaseManager):
 
     def wait_for_state(self, name: str, value: Any, timeout=10):
         cur_value = None
+        rospy.logerr(f"等待: {name} == {value}")
         for i in range(int(timeout / 0.1)):
             with self.lock:
                 cur_value = self.state.get(name, None)
@@ -267,7 +276,7 @@ class TestHelper(BaseManager):
                     raise RuntimeError(res)
                 msg = res["msg"]
 
-                rospy.logerr(123, res)
+                rospy.logerr(f"123, {res}")
                 if msg.get("arm") == False:
                     rospy.logerr(f"Error: {msg['reason']}")
                     continue

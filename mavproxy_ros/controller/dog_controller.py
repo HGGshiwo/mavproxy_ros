@@ -217,9 +217,6 @@ class DogController(BaseManager, BaseController):
           "enu"  — ENU坐标系下: x为E, y为N, z为U
           "body" — 机体坐标系下: x为前, y为左, z为下
         """
-        logger.info(
-            f"do_send_cmd: p={p}, v={v}, a={a}, yaw={yaw} yr={yaw_rate} frame={frame}"
-        )
         self.vel_controller.set_target(p, v, yaw, yaw_rate, frame)
 
     def is_alt_enable(self):
@@ -303,7 +300,7 @@ class DogController(BaseManager, BaseController):
     # ===================== 接收类指令（SOCKET监听）=====================
     @UDPComponent.on_message(CommandType.BATTERY_LEVEL_REPORT)
     @throttle(frequency=1)
-    def battery_level_report(self, data: bytes):
+    def battery_level_report(self, data: bytes, addr):
         """接收电池电量数据（0.5Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, BatteryLevel):
@@ -314,7 +311,7 @@ class DogController(BaseManager, BaseController):
 
     @UDPComponent.on_message(CommandType.MOTION_STATE_REPORT)
     @throttle(frequency=1)
-    def motion_state_report(self, data: bytes):
+    def motion_state_report(self, data: bytes, addr):
         """接收运动状态数据（200Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, MotionStateData):
@@ -382,7 +379,7 @@ class DogController(BaseManager, BaseController):
 
     @UDPComponent.on_message(CommandType.RUN_STATUS_REPORT)
     @throttle(frequency=1)
-    def run_status_report(self, data: bytes):
+    def run_status_report(self, data: bytes, addr):
         """接收运行状态数据（200Hz）"""
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, RcsData):
@@ -425,7 +422,7 @@ class DogController(BaseManager, BaseController):
 
     @UDPComponent.on_message(CommandType.ERROR_CODE_REPORT)
     @throttle(frequency=10)
-    def error_code_report(self, data: bytes):
+    def error_code_report(self, data: bytes, addr):
         """接收错误码数据"""
         _, data_obj = unpack_q25_udp_cmd(data)
         if not isinstance(data_obj, ErrorCode):

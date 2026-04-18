@@ -1,10 +1,12 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
+from logging import getLogger
 from typing import Dict, Optional
 
 import requests
 
 _executor = ThreadPoolExecutor(max_workers=4)
+logger = getLogger(__name__)
 
 
 def wait_for_debugger():
@@ -86,7 +88,7 @@ def post_json(
             return res
 
         except Exception as e:
-            print(f"post res: {e}")
+            logger.logerr(f"Post Error: url={url} data={data} err={e}")
             return None
 
     return _executor.submit(_post)

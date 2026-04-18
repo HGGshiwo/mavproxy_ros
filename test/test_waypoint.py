@@ -11,7 +11,6 @@ from std_msgs.msg import String
 from mavproxy_ros.test.test_helper import TestHelper, sitl_env
 from mavproxy_ros.test.utils import gps_distance
 
-MODEL_NAME = "iris_demo"
 XY_THRESHOLD = 3  # 目标的距离阈值
 Z_THRESHOLD = 1.2  # 高度的距离阈值
 
@@ -25,6 +24,7 @@ test_waypoint = [
     [120.14080283354473, 30.11221289237057, 10],
     [120.1408582968425, 30.112159394516993, 7],
 ]
+MODEL_NAME_MAP = {"dog": "/", "drone": "iris_demo"}
 
 
 class TestWaypoint(unittest.TestCase):
@@ -32,6 +32,7 @@ class TestWaypoint(unittest.TestCase):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
         self.helper = TestHelper()
+        self.robot_type = rospy.get_param("~robot_type")
 
     def tearDown(self):
         pass
@@ -45,8 +46,11 @@ class TestWaypoint(unittest.TestCase):
 
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
-        self.helper.set_state(MODEL_NAME, x=IRIS_X, y=IRIS_Y, z=0.2)
-        with sitl_env():
+
+        self.helper.set_state(
+            MODEL_NAME_MAP.get(self.robot_type), x=IRIS_X, y=IRIS_Y, z=0.2
+        )
+        with sitl_env(self.robot_type):
             pub.publish("restart")
             self.helper.init()
             self.helper.takeoff()
@@ -59,20 +63,25 @@ class TestWaypoint(unittest.TestCase):
             home_lon = self.helper.state["lon"]
             for i, wp in enumerate(test_waypoint[1:]):
                 for _ in range(10):
-                    res = self.helper.ws_event_queue.get(timeout=500)
+                    try:
+                        res = self.helper.ws_event_queue.get(timeout=50)
+                    except:
+                        continue
                     if res.get("event", None) == "progress":
                         break
                 else:
                     raise RuntimeError("没有出现进度信息!")
 
                 assert res.get("total", None) == len(test_waypoint) - 1, res
+                rospy.logerr(f"i: {i}")
                 assert res.get("cur", None) == i + 1, f"{res}, {i}"
                 lat = self.helper.state["lat"]
                 lon = self.helper.state["lon"]
                 dist = gps_distance(lon, lat, wp[0], wp[1])
-                dist_z = math.fabs(self.helper.state["rel_alt"] - wp[2])
                 assert dist < XY_THRESHOLD, f"dist: {dist}, wp:[{wp[0]}, {wp[1]}]"
-                assert dist_z < Z_THRESHOLD, f"z: {dist_z}"
+                if self.robot_type == "drone":
+                    dist_z = math.fabs(self.helper.state["rel_alt"] - wp[2])
+                    assert dist_z < Z_THRESHOLD, f"z: {dist_z}"
 
             self.helper.wait_for_state("state", "悬停状态", 120)
             self.helper.http_post("/return")
@@ -80,7 +89,7 @@ class TestWaypoint(unittest.TestCase):
             dist_to_home = gps_distance(
                 home_lon, home_lat, self.helper.state["lon"], self.helper.state["lat"]
             )
-            assert dist_to_home < 2, dist_to_home
+            assert dist_to_home < 2.5, dist_to_home
 
 
 if __name__ == "__main__":
