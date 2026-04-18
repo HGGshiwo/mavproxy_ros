@@ -121,9 +121,10 @@ class TestFollow(unittest.TestCase):
             self.helper.wait_for_state("state", "悬停状态", 120)
             self.helper.http_post("/return")
             self.helper.wait_for_state("state", "地面状态", 120)
-            assert gps_distance(
+            dist_to_home = gps_distance(
                 home_lon, home_lat, self.helper.state["lon"], self.helper.state["lat"]
             )
+            assert dist_to_home < 2, dist_to_home
 
 
 if __name__ == "__main__":

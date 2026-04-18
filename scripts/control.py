@@ -242,7 +242,9 @@ class Control(BaseManager):
     def idle(self):
         rate = rospy.Rate(self.idle_hz)
         while not rospy.is_shutdown():
-            self.state_map.get(self.node_type).trigger("idle", {})
+            out = self.state_map.get(self.node_type).trigger("idle", {})
+            for o in out:
+                o.result()
             rate.sleep()
 
     def step(self, node_type: NodeType):
@@ -309,12 +311,18 @@ class Control(BaseManager):
         )
 
     def check_yaw(self, yaw_enu):
-        yaw_ned = math.pi / 2 - yaw_enu
-        if yaw_ned < 0:
-            yaw_ned += 2 * math.pi
-        if yaw_ned > 2 * math.pi:
-            yaw_ned -= 2 * math.pi
-        return math.fabs(self.state_estimator.ned_yaw - yaw_ned)
+        """
+        计算目标偏航角与当前偏航角的最小夹角
+        返回值范围: [-pi, pi]
+        正数和负数明确表示了相对方向（比如正为左，负为右）
+        """
+        # 直接求差值
+        diff = yaw_enu - self.state_estimator.enu_yaw
+
+        # 利用 atan2(sin, cos) 魔法将其完美映射到 [-pi, pi] 的最短路径
+        theta = math.atan2(math.sin(diff), math.cos(diff))
+
+        return math.fabs(theta)
 
     def check_arrive(self, goal: Tuple[float, float, float], tolerance: float = 2):
         if not self.state_estimator.odom_ok:
@@ -538,34 +546,18 @@ class Control(BaseManager):
             self.last_alt = self.rel_alt
             self.start_time = time.time()
 
-    @PosvelMoveState.enter()
-    def pos_vel_move_state_enter(self):
-        self._last_call_time = time.time()
-        # 缓存目标 ENU 坐标，供 IDLE 中到达判定使用
-        self._goal_enu = None
-
-    @state_guard(True, False, NodeType.INIT)
-    def _update_goal_enu(self):
-        """根据当前 posvel_target_pos 计算并缓存目标的 ENU 绝对坐标"""
-        diff_x, diff_y, diff_z = self.state_estimator.gps2enu_body(
-            self.posvel_target_pos
-        )
-
-        self._goal_enu = [
-            diff_x + self.state_estimator.enu_x,
-            diff_y + self.state_estimator.enu_y,
-            diff_z + self.state_estimator.enu_z,
-        ]
-
     def set_posvel(self, pos, vel):
         """收到新的posvel请求时更新目标并刷新超时计时"""
         self.posvel_target_pos = pos
         self.posvel_target_vel = vel
         self._last_call_time = time.time()
-        self._update_goal_enu()
-        diff_x, diff_y, diff_z = self.state_estimator.gps2enu_body(pos)
+
+    def send_posvel_cmd(self):
+        diff_x, diff_y, diff_z = self.state_estimator.gps2enu_body(
+            self.posvel_target_pos
+        )
         distance = math.sqrt(diff_x * diff_x + diff_y * diff_y)
-        v = vel
+        v = self.posvel_target_vel
         if distance < v * v:
             v = math.sqrt(distance)
         radian = math.atan2(diff_y, diff_x)
@@ -595,20 +587,12 @@ class Control(BaseManager):
             )
             self.step(self.posvel_node_before)
             return
-
-        # ── 到达判定（与 WpNode 一致：用 odom 三维距离） ─────────────────────
-        if self._goal_enu is None:
-            self._update_goal_enu()
-        if self._goal_enu is None:
-            return
-
-        odom = self.odom
-        if odom is None:
-            return
-
-        arrive = self.check_arrive(self._goal_enu, POSVEL_ARRIVE_DISTANCE)
+        goal = self.state_estimator.gps2enu(self.posvel_target_pos)
+        arrive = self.check_arrive(goal, POSVEL_ARRIVE_DISTANCE)
         if arrive:
             self.step(NodeType.POSVEL_YAW)
+            return
+        self.send_posvel_cmd()
 
     @PosvelYawState.enter()
     def pos_vel_yaw_state_enter(self):
@@ -627,7 +611,7 @@ class Control(BaseManager):
         # 持续发送原地悬停+偏航调整指令
         self.do_send_cmd(v=[0, 0, 0], yaw=target_yaw)
         yaw_diff = self.check_yaw(target_yaw)
-        logger.debug(f"[PosvelYaw] yaw_diff: {yaw_diff:.3f} rad")
+        logger.info(f"[PosvelYaw] yaw_diff: {yaw_diff:.3f} rad")
         if yaw_diff < YAW_TOLERANCE:
             logger.info("[PosvelYaw] yaw aligned, returning to prev state")
             self.step(self.posvel_node_before)
@@ -1011,11 +995,10 @@ class Control(BaseManager):
         self.posvel_target_yaw = data.yaw  # yaw 可为 None，表示到达后不额外调整
         self.posvel_fix_yaw = data.fix_yaw
         self.posvel_timeout = data.timeout  # 超时时长由接口传入
-        if cur_node_type == NodeType.POSVEL_MOVE:
-            # 已在移动中，直接触发目标更新
-            self.set_posvel(pos=data.pos, vel=data.vel)
-        else:
-            # 从其他状态进入：记录当前机头朝向（fix_yaw=True 时全程使用），然后直接进入移动
+
+        # 更新目标
+        self.set_posvel(pos=data.pos, vel=data.vel)
+        if cur_node_type != NodeType.POSVEL_MOVE:
             self.step(NodeType.POSVEL_MOVE)
         return SUCCESS_RESPONSE()
 

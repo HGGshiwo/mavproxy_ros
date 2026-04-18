@@ -27,7 +27,7 @@ test_waypoint = [
 ]
 
 
-class TestWaypoint(unittest.TestCase):
+class TestPlanner(unittest.TestCase):
     def setUp(self):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
@@ -58,6 +58,9 @@ class TestWaypoint(unittest.TestCase):
             home_lat = self.helper.state["lat"]
             home_lon = self.helper.state["lon"]
             for i, wp in enumerate(test_waypoint[1:]):
+                if i == 3:
+                    res = self.helper.http_post("/start_planner")
+                    assert res.get("status", None) == "success", res
                 for _ in range(10):
                     res = self.helper.ws_event_queue.get(timeout=500)
                     if res.get("event", None) == "progress":
@@ -85,4 +88,4 @@ class TestWaypoint(unittest.TestCase):
 
 if __name__ == "__main__":
     # 将 unittest 挂载到 rostest 框架上
-    rostest.rosrun("mavproxy_ros", "test_waypoint", TestWaypoint)
+    rostest.rosrun("mavproxy_ros", "test_planner", TestPlanner)

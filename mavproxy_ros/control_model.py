@@ -29,7 +29,7 @@ class SetWaypointModel(BaseModel):
 
 class SetPosVelModel(BaseModel):
     pos: List[float]  # 目标点, 到达速度=0
-    vel: float  # 最大速度限制
+    vel: float = 2  # 最大速度限制
     yaw: Optional[float] = None  # 到达后的期望偏航
     # True: 运动中始终固定为yaw指定的方向/False: 调整为目标点后再运动
     fix_yaw: Optional[bool] = True
