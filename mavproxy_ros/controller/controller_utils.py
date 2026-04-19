@@ -109,11 +109,13 @@ class VelController:
         control_hz: float = 10,
         max_acc: float = 1,
         max_yaw_acc: float = 1,
+        max_vel: float = 1,
         vel_timeout: float = 1,
     ):
         self.dt = 1.0 / control_hz
         self.max_acc = max_acc
         self.max_yaw_acc = max_yaw_acc
+        self.max_vel = max_vel
 
         self.controller_cb = controller_cb
         self.vel = None
@@ -300,7 +302,7 @@ class VelController:
         """
         进行持续控制
         """
-        MAX_VEL = 1.0
+        MAX_VEL = self.max_vel
         while not rospy.is_shutdown():
             time.sleep(self.dt)
             with self.target_lock:

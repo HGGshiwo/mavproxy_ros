@@ -1,7 +1,11 @@
 from dataclasses import field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
+
+
+class MotionStateModel(BaseModel):
+    state: Literal["walk", "crawl", "run_high", "run_low"] = "walk"
 
 
 class JoystickModel(BaseModel):

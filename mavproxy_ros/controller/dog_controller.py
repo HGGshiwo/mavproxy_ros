@@ -3,8 +3,9 @@
 import struct
 import threading
 import time
+from enum import Enum
 from logging import getLogger
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 import numpy as np
 import rospy
@@ -55,6 +56,39 @@ def router(data: bytes):
 # port = 9112
 
 
+class GaitState(str, Enum):
+    WALK = "walk"
+    RUN = "run"
+
+
+class PlatformHeight(str, Enum):
+    CRAWL = "crawl"
+    NORMAL = "normal"
+
+
+class SpeedState(str, Enum):
+    HIGH = "high"
+    LOW = "low"
+
+
+class ConditionValue:
+    def __init__(self, default=None):
+        self._cond = threading.Condition()
+        self._value = default
+
+    def wait_for(self, value, timeout=None):
+        with self._cond:
+            self._cond.wait_for(lambda: value == self._value, timeout=timeout)
+
+    def set(self, value):
+        with self._cond:
+            self._value = value
+
+    def get(self):
+        with self._cond:
+            return self._value
+
+
 class DogController(BaseManager, BaseController):
     def __init__(self, trigger_land: Callable):
         # 组件配置
@@ -75,8 +109,7 @@ class DogController(BaseManager, BaseController):
         self.max_forward_vel = None
         self.v_max_lock = threading.Lock()
         self.basic_state = None
-        self.is_run = None
-        self.paltform_height = None
+
         self.max_accel = 1.0
         self.max_yaw_accel = 1.0
         self._last_vx = 0.0
@@ -89,6 +122,11 @@ class DogController(BaseManager, BaseController):
         # 订阅 ENU odom，用于位置控制
         self._odom: Optional[Odometry] = None
         self._odom_lock = threading.Lock()
+
+        self.platform_height = ConditionValue()
+        self.gait_state = ConditionValue()
+        self.speed_state = ConditionValue()
+
         rospy.Subscriber(
             "/mavros/local_position/odom", Odometry, self._odom_callback, queue_size=1
         )
@@ -126,6 +164,51 @@ class DogController(BaseManager, BaseController):
         self.loiter()
         data = pack_q25_udp_cmd(CommandType.TOGGLE_STAND_DOWN)
         self.send_to_server(data)
+
+    def set_speed_state(self, speed_state: Literal["low", "high"]):
+        if speed_state == SpeedState.LOW:
+            data = pack_q25_udp_cmd(CommandType.SWITCH_SPEED_GEAR, 0)
+        elif speed_state == SpeedState.HIGH:
+            data = pack_q25_udp_cmd(CommandType.SWITCH_SPEED_GEAR, 1)
+        self.send_to_server(data)
+        self.speed_state.set(speed_state)
+        self.speed_state.wait_for(speed_state, 3)
+
+    def get_speed_state(self):
+        return self.speed_state.get().value
+
+    def set_gait_state(self, gait_state: Literal["run", "walk"]):
+        """切换跑步/行走"""
+        if gait_state == GaitState.RUN:
+            # 先切回正常高度
+            self.set_platform_height("normal")
+            data = pack_q25_udp_cmd(CommandType.GAIT_RUN)
+        elif gait_state == GaitState.WALK:
+            data = pack_q25_udp_cmd(CommandType.GAIT_WALK)
+        else:
+            raise RuntimeError(gait_state)
+        self.send_to_server(data)
+        self.gait_state.wait_for(gait_state, 3)
+
+    def get_gait_state(self):
+        return self.gait_state.get().value
+
+    def set_platform_height(self, height_type: Literal["normal", "crawl"]):
+        """切换匍匐(crawl)/正常行走(normal)"""
+        if height_type == PlatformHeight.NORMAL:
+            data = pack_q25_udp_cmd(CommandType.SET_PLATFORM_HEIGHT, 2)
+        elif height_type == PlatformHeight.CRAWL:
+            # 保证在walk中调用
+            self.set_gait_state("walk")
+            data = pack_q25_udp_cmd(CommandType.SET_PLATFORM_HEIGHT, 0)
+        else:
+            raise KeyError(f"不支持的高度类型: {height_type}")
+        self.send_to_server(data)
+        self.platform_height.set(height_type)
+        self.platform_height.wait_for(height_type, 3)
+
+    def get_platform_height(self):
+        return self.platform_height.get().value
 
     def loiter(self):
         for i in range(20):  # 发送2s的停止指令，防止还有速度，可能需要更加优雅的实现
@@ -320,12 +403,16 @@ class DogController(BaseManager, BaseController):
         with self.v_max_lock:
             self.max_forward_vel = data_obj.max_forward_vel
             self.max_backward_vel = data_obj.max_backward_vel
+            self.vel_controller.max_vel = data_obj.max_forward_vel
+
         # 修正gait_desc判断（文档：0x20=行走，0x23=跑步）
         gait_desc = "未知步态"
         if data_obj.gait_state == 0x20:
             gait_desc = "行走"
+            self.gait_state.set(GaitState.WALK)
         elif data_obj.gait_state == 0x23:
             gait_desc = "跑步"
+            self.gait_state.set(GaitState.RUN)
         _json_data = {
             "basic_state": data_obj.basic_state,
             "gait_state": data_obj.gait_state,
@@ -364,18 +451,13 @@ class DogController(BaseManager, BaseController):
             """防止在发布了起飞后，但是还没有响应的情况下出发"""
             self.trigger_land()
         self.basic_state = data_obj.basic_state
-        self.is_run = data_obj.gait_state == 0x23
-        # http_proxy.ws_send(
-        #     self,
-        #     dict(
-        #         basic_state_desc=basic_state_desc,
-        #         gait_desc=gait_desc,
-        #         max_forward_vel=data_obj.max_forward_vel,
-        #         max_backward_vel=data_obj.max_backward_vel,
-        #     ),
-        #     MessageType.STATE,
-        # )
-        self.wsproxy.state(dict(basic_state=basic_state_desc))
+        self.wsproxy.state(
+            dict(
+                basic_state=basic_state_desc,
+                max_forward_vel=self.max_forward_vel,
+                max_backward_vel=self.max_backward_vel,
+            )
+        )
 
     @UDPComponent.on_message(CommandType.RUN_STATUS_REPORT)
     @throttle(frequency=1)

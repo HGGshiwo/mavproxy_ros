@@ -34,6 +34,9 @@ StatusConfig("wp_idx", "当前航点", collapse=True)
 StatusConfig("follow x", "跟随速度X", collapse=True)
 StatusConfig("follow y", "跟随速度Y", collapse=True)
 StatusConfig("follow z", "跟随速度Z", collapse=True)
+StatusConfig("max_forward_vel", "最大前向速度", collapse=True)
+StatusConfig("max_backward_vel", "最大后向速度", collapse=True)
+
 PrimaryButtonConfig(name="起飞检查", target=ToastConfig(url="/prearms", method="GET"))
 PrimaryButtonConfig(
     name="起飞",

@@ -11,6 +11,7 @@ from event_callback.components.http.proxy import HTTP_ProxyComponent
 from event_callback.components.ros import ROSComponent
 
 from mavproxy_ros.controller import BaseController
+from mavproxy_ros.controller.dog_controller import DogController
 from mavproxy_ros.state_estimator import StateEstimator
 
 _SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -97,6 +98,21 @@ class NodeType(Enum):
     POSVEL_YAW = ("编队偏航", PosvelYawState)  # 到达目标位置后调整到目标yaw
 
 
+def robot_guard(*robot_type: List[str]):
+    """特定机器人类型支持的接口"""
+
+    def wrapper(func):
+        @functools.wraps(func)
+        def new_func(self, *args, **kwargs):
+            if self.controller_name not in robot_type:
+                raise RuntimeError(f"{self.controller_name}不支持{func.__name__}")
+            return func(self, *args, **kwargs)
+
+        return new_func
+
+    return wrapper
+
+
 def state_guard(exclude: bool, raise_error: bool, *state: List[BaseState]):
     def wrapper(func):
         state_set = set(state)
@@ -167,6 +183,9 @@ class Control(BaseManager):
         self.speed = 0
 
         self._wp_raw = None
+        self.motion_state = (
+            "walk"  # dog没有提供完整的运动状态上报接口，这里简单记录下传入的状态
+        )
 
         self.rangefinder_alt = None  # 测距仪高度
         self.rc_channel = None  # 遥控器输入
@@ -972,6 +991,32 @@ class Control(BaseManager):
                 "gps": [self.gps_lon, self.gps_lat, self.gps_alt],
             }
         )
+
+    @HTTP_ProxyComponent.on_post("/set_motion_state")
+    @robot_guard("dog")
+    def on_set_motion_state(self, data: MotionStateModel):
+        self.control: DogController
+        if data.state == "walk":
+            self.control.set_gait_state("walk")
+            self.control.set_platform_height("normal")
+        elif data.state == "crawl":
+            self.control.set_gait_state("walk")
+            self.control.set_platform_height("crawl")
+        elif data.state == "run_high":
+            self.control.set_gait_state("run")
+            self.control.set_speed_state("high")
+        elif data.state == "run_low":
+            self.control.set_gait_state("run")
+            self.control.set_speed_state("low")
+        else:
+            raise RuntimeError(f"不支持的状态：{data.state}!")
+        self.motion_state = data.state
+        return SUCCESS_RESPONSE()
+
+    @HTTP_ProxyComponent.on_get("/get_motion_state")
+    @robot_guard("dog")
+    def on_get_motion_state(self):
+        return SUCCESS_RESPONSE(self.motion_state)
 
     @HTTP_ProxyComponent.on_post("/set_posvel")
     @state_guard(True, True, NodeType.GROUND, NodeType.INIT)
