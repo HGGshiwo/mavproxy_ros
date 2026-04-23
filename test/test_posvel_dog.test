@@ -1,0 +1,7 @@
+<launch>
+    <arg name="gui" default="true"/>
+    <include file="$(find mavproxy_ros)/test/test_posvel.test">
+        <arg name="robot_type" value="dog"/>
+        <arg name="gui" value="$(arg gui)"/>
+    </include>
+</launch>

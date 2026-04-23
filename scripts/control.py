@@ -34,7 +34,7 @@ from event_callback.core import BaseComponent, BaseEvent, BaseManager
 from event_callback.ros_utils import rospy_init_node
 from event_callback.utils import setup_logger, throttle
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
-from mavros_msgs.msg import HomePosition, RCIn, State, StatusText, SysStatus
+from mavros_msgs.msg import VFR_HUD, HomePosition, RCIn, State, StatusText, SysStatus
 from mavros_msgs.srv import CommandBool, CommandLong, SetMode
 from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
@@ -151,9 +151,7 @@ class Control(BaseManager):
     def init_control(self):
         self.node_type = NodeType.INIT
         self.planner_enable = rospy.get_param("~planner_enable", True)
-        self.pland_enable = rospy.get_param(
-            "~pland_enable", default=True
-        )  # 是否进行精准降落
+
         self.min_alt_threshold = rospy.get_param("~min_alt_threshold", 0.5)
 
         self.state_estimator = StateEstimator()
@@ -203,6 +201,8 @@ class Control(BaseManager):
         self.posvel_timeout = 2.0  # 超时时长（秒），由接口传入
         self.posvel_node_before = NodeType.HOVER  # 进入posvel模式前的状态
 
+        self.throttle = None
+
         logger.info("wait for mavros service...")
         rospy.wait_for_service("/mavros/cmd/arming", timeout=5)
         rospy.wait_for_service("/mavros/set_mode", timeout=5)
@@ -214,7 +214,7 @@ class Control(BaseManager):
         self.wp_pub = ROSComponent.create_publisher(
             "/move_base_simple/goal2", PoseStamped, queue_size=-1
         )
-        self.ws_pub = ROSComponent.create_publisher("ws", String, queue_size=-1)
+        self.ws_pub = ROSComponent.create_publisher("ws", String, queue_size=100)
         self.stop_pub = ROSComponent.create_publisher(
             "/egoplanner/stopplan", Empty, queue_size=-1
         )
@@ -244,7 +244,14 @@ class Control(BaseManager):
             self.controller_name, trigger_land=trigger_land
         )
         self.do_send_cmd = self.control.do_send_cmd
-        self.pland_enable = self.control.is_pland_enable() and self.pland_enable
+
+        if not self.control.is_pland_enable():
+            self.pland_type = None
+        else:
+            pland_enable = rospy.get_param(
+                "~pland_enable", default=False
+            )  # 是否进行精准降落
+            self.pland_type = "external" if pland_enable else None
 
     @HTTP_ProxyComponent.on_ready()
     def on_ready(self):
@@ -288,7 +295,7 @@ class Control(BaseManager):
 
     @property
     def pland_desc(self):
-        return "启用" if self.pland_enable else "关闭"
+        return "关闭" if self.pland_type == None else self.pland_type
 
     def check_state(self):
         if not self.state_estimator.odom_ok:
@@ -503,15 +510,25 @@ class Control(BaseManager):
         post_json("set_gimbal", {"mode": "body", "angle": 90})
         post_json("stop_record")
 
-        if not self.pland_enable:
+        if self.pland_type == None or self.pland_type == "apm":
             self.control.do_land()
         else:
             rospy.wait_for_service("/pland/start", 10)
             self.pland_start_srv(TriggerRequest())
 
+    @LandState.idle()
+    def land_state_idle(self):
+        if self.throttle is not None and self.rangefinder_alt is not None:
+            # 在有rangefinder的情况下，支持触发ground
+            if self.throttle < 0.01 and self.rangefinder_alt < 0.5:
+                self.step(NodeType.GROUND)
+                return
+
     @LandState.exit()
     def land_state_exit(self):
-        if self.pland_enable:
+        if self.pland_type == None or self.pland_type == "apm":
+            pass
+        else:
             rospy.wait_for_service("/pland/stop", 10)
             self.pland_stop_srv(TriggerRequest())
         self.do_ws_pub({"type": "event", "event": "disarm"})
@@ -691,6 +708,7 @@ class Control(BaseManager):
         if not res.mode_sent:
             raise RuntimeError("模式设置出错, mode_sent返回False!")
         for i in range(50):
+            time.sleep(0.1)
             if self.mode == mode:
                 rospy.loginfo(f"模式成功切换至: {mode}")
                 return
@@ -754,6 +772,8 @@ class Control(BaseManager):
             param7=0,
         )
         bits = 0x10000000
+        if self.sys_status is None:
+            return False, "没有获取到sys_status数据！"
         if (self.sys_status.sensors_health & bits) == bits:
             return True, ""
 
@@ -774,6 +794,7 @@ class Control(BaseManager):
             }
             self.do_ws_pub(data)
             rospy.logerr(f"do_ws_pub: {data}")
+
         self.do_ws_pub({"type": "state", "wp_idx": self.wp_idx + 1})
         logger.info(f"wp done: {self.waypoint[self.wp_idx]} land: {self.land}")
         self.wp_idx += 1
@@ -792,15 +813,15 @@ class Control(BaseManager):
         vy = msg.twist.linear.x
         self.do_ws_pub(dict(x_vel=vx, y_vel=vy))
 
-    @ROSComponent.on_topic("/mavros/home_position/home", HomePosition)
-    def home_callback(self, msg: HomePosition):
-        if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
-            self.takeoff_lat = msg.geo.latitude
-            self.takeoff_lon = msg.geo.longitude
-            self.takeoff_alt = msg.geo.altitude
-            logger.info(
-                f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}"
-            )
+    # @ROSComponent.on_topic("/mavros/home_position/home", HomePosition)
+    # def home_callback(self, msg: HomePosition):
+    #     if self.takeoff_lat == 0 and self.takeoff_lon == 0 and self.takeoff_alt == 0:
+    #         self.takeoff_lat = msg.geo.latitude
+    #         self.takeoff_lon = msg.geo.longitude
+    #         self.takeoff_alt = msg.geo.altitude
+    #         logger.info(
+    #             f"set_home: {self.takeoff_lon} {self.takeoff_lat} {self.takeoff_alt}"
+    #         )
 
     @ROSComponent.on_topic("/mavros/global_position/global", NavSatFix)
     def gps_cb(self, data: NavSatFix):
@@ -833,7 +854,13 @@ class Control(BaseManager):
         vy = msg.twist.twist.linear.y
 
         self.do_ws_pub(
-            dict(yaw=self.state_estimator.ned_yaw, x_vel_body=vx, v_vel_body=vy)
+            dict(
+                yaw=self.state_estimator.ned_yaw,
+                x_vel_body=vx,
+                v_vel_body=vy,
+                roll=self.state_estimator.roll,
+                pitch=self.state_estimator.pitch,
+            )
         )
 
     @ROSComponent.on_topic("/UAV0/perception/object_location/location_vel", PointObj)
@@ -969,6 +996,11 @@ class Control(BaseManager):
             msg.pose.position.y,
             yaw,
         )
+
+    @ROSComponent.on_topic("/mavros/vfr_hud", VFR_HUD)
+    @throttle(1)
+    def on_vfr_hud(self, msg: VFR_HUD):
+        self.throttle = msg.throttle
 
     @ROSComponent.on_topic("/mavros/distance_sensor/rangefinder_pub", Range)
     def rangefinder_cb(self, msg: Range):
@@ -1173,17 +1205,21 @@ class Control(BaseManager):
 
     @HTTP_ProxyComponent.on_get("/get_pland")
     def get_pland(self):
-        return SUCCESS_RESPONSE(msg=self.pland_enable)
+        return SUCCESS_RESPONSE(msg=self.pland_type)
 
     @HTTP_ProxyComponent.on_post("/stop_pland")
     def stop_pland(self):
-        self.pland_enable = False
+        """完全关闭精准降落，包括apm和外部的"""
+        self.pland_type = None
+        futrue = post_json("/set_param", dict(param=dict(PLND_ENABLED=dict(value=0))))
+        res = futrue.result()
+        assert res.get("status", None) == "success", res
         self.ws_pub(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 
     @HTTP_ProxyComponent.on_post("/start_pland")
-    def start_pland(self):
-        self.pland_enable = True
+    def start_pland(self, data: StartPlandModel):
+        self.pland_type = data.pland_type
         self.ws_pub(json.dumps({"type": "state", "pland": self.pland_desc}))
         return SUCCESS_RESPONSE()
 

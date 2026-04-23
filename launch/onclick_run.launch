@@ -42,7 +42,7 @@
             <rosparam command="load" file="$(find mavproxy_ros)/config/pland.yml" />
             <remap from="/pland_camera/image_raw" to="$(arg pland_image_topic)" />
             <remap from="/pland_camera/compressed" to="$(arg pland_image_compressed_topic)" />
-            <remap from="/UAV0/sensor/video11_camera/cam_info" to="$(arg pland_camera_info)" />
+            <remap from="/UAV0/sensor/video11_camera/cam_info" to="$(arg pland_camera_info_topic)" />
         </node>
         <node pkg="mavproxy_ros" type="param.py" name="param" output="screen" clear_params="true"
             respawn="$(arg respawn)">

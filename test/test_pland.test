@@ -1,0 +1,26 @@
+<launch>
+    <arg name="robot_type" value="drone" />  <!-- dog/drone -->
+    <arg name="gui" default="true"/>
+    <include file="$(find gazebo_sim)/launch/iris_with_roscam2.launch">
+        <arg name="gui" value="$(arg gui)" />
+        <arg name="rviz" value="false" />
+        <arg name="robot_type" value="drone" />
+        <arg name="output" value="log" />
+    </include>
+    <test pkg="mavproxy_ros" type="test_pland.py" test-name="test_pland" time-limit="600">
+        <param name="robot_type" value="$(arg robot_type)" />
+    </test>
+
+    <include file="$(find gazebo_sim)/launch/apm.launch">
+        <arg name="fcu_url" value="tcp://:5760@" />
+        <arg name="respawn_mavros" value="true" />
+    </include>
+    <include file="$(find mavproxy_ros)/launch/onclick_run_drone_sim.launch">
+        <arg name="respawn" value="true" />
+        <arg name="pland_enable" value="true" />
+    </include>
+    <!-- <node name="spawn_apriltag" pkg="gazebo_ros" type="spawn_model"
+        args="-sdf -file $(find gazebo_sim)/models/apriltag/model-1_4.sdf  -model apriltag 
+            -x -100 -y -100 -z 0.001 -R 0 -P 1.57 -Y 1.57"
+        output="screen" /> -->
+</launch>

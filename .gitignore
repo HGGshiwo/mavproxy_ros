@@ -7,3 +7,4 @@ logs/*.BIN
 terrain/*
 logs/LASTLOG.TXT
 log/
+test_log/

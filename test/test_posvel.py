@@ -8,10 +8,8 @@ import unittest
 import numpy as np
 import rospy
 import rostest
-from rsos_msgs.msg import PointObj
-from std_msgs.msg import String
 
-from mavproxy_ros.test.test_helper import TestHelper, sitl_env
+from mavproxy_ros.test.test_helper import Robot, http_post, sitl_env
 from mavproxy_ros.test.utils import get_gps, gps_distance
 
 MODEL_NAME = "iris_demo"
@@ -46,7 +44,7 @@ class TestPosvel(unittest.TestCase):
     def setUp(self):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
-        self.helper = TestHelper()
+        self.robot = Robot()
 
     def tearDown(self):
         pass
@@ -57,25 +55,24 @@ class TestPosvel(unittest.TestCase):
         2. 测试fix_yaw = True，移动过程中yaw必须和target接近
         3. 测试超时功能（发送posvel，等待2s后处于悬停）
         """
-        pub = rospy.Publisher("/mavproxy/restart", String)
 
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
-        self.helper.set_robot_state(x=IRIS_X, y=IRIS_Y, z=0.2)
+        time.sleep(1)
+        self.robot.set_state(x=IRIS_X, y=IRIS_Y, z=1.0)
 
-        with self.helper.sitl_env():
-            pub.publish("restart")
-            self.helper.init()
-            self.helper.http_post("/stop_pland")
-            self.helper.http_post("/stop_planner")
-            self.helper.takeoff()
+        with sitl_env():
+            self.robot.init()
+            http_post("/stop_pland", check=True)
+            http_post("/stop_planner", check=True)
+            self.robot.takeoff()
 
-            home_lat = self.helper.state["lat"]
-            home_lon = self.helper.state["lon"]
+            home_lat = self.robot.state["lat"]
+            home_lon = self.robot.state["lon"]
 
             def send_pos_vel(fix_yaw):
-                start_lat = self.helper.state["lat"]
-                start_lon = self.helper.state["lon"]
+                start_lat = self.robot.state["lat"]
+                start_lon = self.robot.state["lon"]
 
                 bearing = random.random() * 2 * np.pi
                 dist = random.randint(8, 16)
@@ -88,7 +85,7 @@ class TestPosvel(unittest.TestCase):
                 for i in range(10000):
                     time.sleep(0.1)
 
-                    res = self.helper.http_post(
+                    http_post(
                         "/set_posvel",
                         dict(
                             pos=[target_lon, target_lat, 10],
@@ -97,14 +94,14 @@ class TestPosvel(unittest.TestCase):
                             fix_yaw=fix_yaw,
                             yaw=yaw,
                         ),
+                        check=True,
                     )
-                    assert res.get("status") == "success", res
                     if fix_yaw:
-                        yaw_list.append(self.helper.state["yaw"])
+                        yaw_list.append(self.robot.state["yaw"])
 
                     dist = gps_distance(
-                        self.helper.state["lon"],
-                        self.helper.state["lat"],
+                        self.robot.state["lon"],
+                        self.robot.state["lat"],
                         target_lon,
                         target_lat,
                     )
@@ -120,30 +117,29 @@ class TestPosvel(unittest.TestCase):
                         yaw_rmse < 0.5
                     ), f"123 {bearing} {yaw_rmse}, {target_yaw}, {yaw_list}, {delta_yaw}"
 
-                self.helper.wait_for_state("state", "悬停状态", 1000)
+                self.robot.wait_for_state("state", "悬停状态", 1000)
 
                 if not fix_yaw:
-                    diff = math.fabs(self.helper.state["yaw"] - yaw)
-                    assert diff < 0.5, f"{self.helper.state['yaw']}, {yaw}, {diff}"
+                    diff = math.fabs(self.robot.state["yaw"] - yaw)
+                    assert diff < 0.5, f"{self.robot.state['yaw']}, {yaw}, {diff}"
 
             send_pos_vel(False)
             send_pos_vel(True)
 
             # 测试超时
             lat, lon = get_gps(
-                self.helper.state["lat"], self.helper.state["lon"], 0, 1000
+                self.robot.state["lat"], self.robot.state["lon"], 0, 1000
             )
-            res = self.helper.http_post("/set_posvel", dict(pos=[lon, lat], timeout=2))
-            assert res.get("status", None) == "success", res
-            assert self.helper.state["state"] == "编队移动", self.helper.state
+            http_post("/set_posvel", dict(pos=[lon, lat], timeout=2), check=True)
+            assert self.robot.state["state"] == "编队移动", self.robot.state
             time.sleep(2.2)
-            assert self.helper.state["state"] == "悬停状态", self.helper.state
+            assert self.robot.state["state"] == "悬停状态", self.robot.state
 
-            self.helper.wait_for_state("state", "悬停状态", 120)
-            self.helper.http_post("/return")
-            self.helper.wait_for_state("state", "地面状态", 120)
+            self.robot.wait_for_state("state", "悬停状态", 120)
+            http_post("/return", check=True)
+            self.robot.wait_for_state("state", "地面状态", 120)
             dist_to_home = gps_distance(
-                home_lon, home_lat, self.helper.state["lon"], self.helper.state["lat"]
+                home_lon, home_lat, self.robot.state["lon"], self.robot.state["lat"]
             )
             assert dist_to_home < 2, dist_to_home
 

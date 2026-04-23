@@ -34,7 +34,6 @@ def parse_param(param):
 
 
 class Param(BaseManager):
-
     def __init__(self):
         super().__init__(ROSComponent(), HTTP_ProxyComponent())
         rospy.wait_for_service("/mavros/param/pull")
@@ -117,6 +116,12 @@ class Param(BaseManager):
 
     @HTTP_ProxyComponent.on_post("/set_param")
     def set_param(self, data: SetParamModel):
+        """
+        param: {
+            "param1": {"value": value1},
+            "param2": {"value": value2}
+        }
+        """
         out = {}
         for name, value in data.param.items():
             res = self._set_param(name, value["value"])

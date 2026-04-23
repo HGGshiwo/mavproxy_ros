@@ -40,6 +40,10 @@ class SetPosVelModel(BaseModel):
     timeout: Optional[float] = 2  # 接口超时时间
 
 
+class StartPlandModel(BaseModel):
+    pland_type: Literal["apm", "external"] = "external"
+
+
 # Other
 class StartRecordModel(BaseModel):
     bag_name: str

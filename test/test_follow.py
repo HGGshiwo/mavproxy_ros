@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # coding=utf-8
-import math
 import random
 import time
 import unittest
@@ -8,9 +7,8 @@ import unittest
 import rospy
 import rostest
 from rsos_msgs.msg import PointObj
-from std_msgs.msg import String
 
-from mavproxy_ros.test.test_helper import TestHelper, sitl_env
+from mavproxy_ros.test.test_helper import Robot, http_post, sitl_env
 from mavproxy_ros.test.utils import gps_distance
 
 MODEL_NAME = "iris_demo"
@@ -34,9 +32,9 @@ class TestFollow(unittest.TestCase):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
         self.pub = rospy.Publisher(
-            "/UAV0/perception/object_location/location_vel", PointObj
+            "/UAV0/perception/object_location/location_vel", PointObj, queue_size=1
         )
-        self.helper = TestHelper()
+        self.robot = Robot()
 
     def tearDown(self):
         pass
@@ -49,49 +47,45 @@ class TestFollow(unittest.TestCase):
         4. 保护时间过后继续响应
         5. 飞一段航点，然后返航
         """
-        pub = rospy.Publisher("/mavproxy/restart", String)
-
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
-        self.helper.set_state(MODEL_NAME, x=IRIS_X, y=IRIS_Y, z=0.2)
-        with sitl_env():
-            pub.publish("restart")
-            self.helper.init()
-            self.helper.http_post("/stop_pland")
-            self.helper.http_post("/stop_planner")
-            self.helper.takeoff(waypoint=test_waypoint)
+        self.robot.set_state(x=IRIS_X, y=IRIS_Y, z=0.5)
 
-            home_lat = self.helper.state["lat"]
-            home_lon = self.helper.state["lon"]
+        with sitl_env():
+            self.robot.init()
+            http_post("/stop_pland", check=True)
+            http_post("/stop_planner", check=True)
+            self.robot.takeoff(waypoint=test_waypoint)
+
+            home_lat = self.robot.state["lat"]
+            home_lon = self.robot.state["lon"]
 
             def test_follow():
                 """发送跟随40秒，然后停止跟随"""
-                lat = self.helper.state["lat"]
-                lon = self.helper.state["lon"]
-                init_z = self.helper.state["rel_alt"]
+                lat = self.robot.state["lat"]
+                lon = self.robot.state["lon"]
+                init_z = self.robot.state["rel_alt"]
 
                 msg = PointObj()
                 msg.velocity.z = 1
                 for i in range(400):
                     self.pub.publish(msg)
                     time.sleep(0.1)
-                assert self.helper.state["state"] == "跟随模式", self.helper.state[
-                    "state"
-                ]
-                lat_cur = self.helper.state["lat"]
-                lon_cur = self.helper.state["lon"]
+                assert self.robot.state["state"] == "跟随模式", self.robot.state
+
+                lat_cur = self.robot.state["lat"]
+                lon_cur = self.robot.state["lon"]
                 xy_dist = gps_distance(lon, lat, lon_cur, lat_cur)
-                z_dist = self.helper.state["rel_alt"] - init_z
+                z_dist = self.robot.state["rel_alt"] - init_z
                 # assert xy_dist < XY_THRESHOLD, f"dist: {xy_dist}"
                 assert z_dist > 15, f"z: {z_dist}"  # 40秒内至少上升了15m
-                res = self.helper.http_post("/stop_follow")
-                assert res.get("status", None) == "success", res
-                assert self.helper.state["state"] != "跟随模式", self.helper.state
+                http_post("/stop_follow", check=True)
+                assert self.robot.state["state"] != "跟随模式", self.robot.state
 
             stop_time = None
             for i, wp in enumerate(test_waypoint[1:]):
                 for _ in range(10):
-                    res = self.helper.ws_event_queue.get(timeout=500)
+                    res = self.robot.ws_event_queue.get(timeout=500)
                     if res.get("event", None) == "progress":
                         break
                 else:
@@ -110,7 +104,7 @@ class TestFollow(unittest.TestCase):
                     for i in range(10):
                         self.pub.publish(msg)
                         time.sleep(0.1)
-                    assert self.helper.state["state"] != "跟随模式", self.helper.state
+                    assert self.robot.state["state"] != "跟随模式", self.robot.state
                 elif i == 3:
                     wait_time = max(0, 110 - time.time() + stop_time)
                     rospy.loginfo(f"等待{wait_time}秒，解除跟随保护")
@@ -118,11 +112,11 @@ class TestFollow(unittest.TestCase):
                     # 110秒需要继续进入跟随
                     test_follow()
 
-            self.helper.wait_for_state("state", "悬停状态", 120)
-            self.helper.http_post("/return")
-            self.helper.wait_for_state("state", "地面状态", 120)
+            self.robot.wait_for_state("state", "悬停状态", 120)
+            http_post("/return")
+            self.robot.wait_for_state("state", "地面状态", 120)
             dist_to_home = gps_distance(
-                home_lon, home_lat, self.helper.state["lon"], self.helper.state["lat"]
+                home_lon, home_lat, self.robot.state["lon"], self.robot.state["lat"]
             )
             assert dist_to_home < 2, dist_to_home
 

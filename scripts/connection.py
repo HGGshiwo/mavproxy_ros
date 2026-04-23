@@ -37,13 +37,10 @@ class Connection(BaseManager):
 
     def init_connection(self):
         self.armed = None  # 是否解锁
+        self.connected = False  # 是否连接上了飞控
         self.handler_map = {}
         self.handler_lock = threading.Lock()
-        self.ws_sub = rospy.Subscriber(
-            "/mavproxy/ws", String, self._ws_callback, queue_size=100
-        )
         logger.info("HTTPComponent create ROS topic: do_register")
-        self._set_rate()
 
     @ROSComponent.on_topic("restart", String)
     def on_restart(self, data):
@@ -79,6 +76,7 @@ class Connection(BaseManager):
         resp = set_rate(req)
         logger.info("set stream done")
 
+    @ROSComponent.on_topic("/mavproxy/ws", String, queue_size=100)
     def _ws_callback(self, data: Any):
         json_data = json.loads(data.data)
         data_type: str = json_data.get("type", "state")
@@ -113,6 +111,9 @@ class Connection(BaseManager):
             dict(mode=data.mode, arm=data.armed, connected=data.connected)
         )
         self.armed = data.armed
+        if self.connected is False and data.connected is True:
+            self._set_rate()  # 在连接上飞控后设置
+        self.connected = data.connected
 
     @ROSComponent.on_topic("/mavros/global_position/raw/satellites", UInt32)
     def gps_cb(self, data: UInt32):
@@ -139,7 +140,7 @@ class Connection(BaseManager):
 if __name__ == "__main__":
     setup_logger(Path(__file__).parent.parent.joinpath("log").absolute())
     rospy_init_node("connection")
-    # wait_for_debugger()
+
     http_comp = HTTPComponent(
         register=True,
         static_dir=Path(__file__).parent.parent / "static",

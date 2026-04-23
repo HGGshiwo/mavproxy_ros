@@ -52,6 +52,21 @@ catkin_package(
     message_runtime
 )
 
+
+if(CATKIN_ENABLE_TESTING)
+  find_package(rostest REQUIRED)
+  
+  add_rostest(test/test_dog.test ARG gui:="false")
+  add_rostest(test/test_follow.test ARG gui:="false")
+  # add_rostest(test/test_pland.test ARG gui:="false")
+  add_rostest(test/test_planner.test ARG gui:="false")
+  add_rostest(test/test_posvel_drone.test ARG gui:="false")
+  add_rostest(test/test_posvel_dog.test ARG gui:="false")
+  add_rostest(test/test_waypoint_drone.test ARG gui:="false")
+  add_rostest(test/test_waypoint_dog.test ARG gui:="false")
+  
+endif()
+
 ###########
 ## Build ##
 ###########
@@ -59,24 +74,9 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-## Executable: test
-add_executable(${PROJECT_NAME}_test src/test.cpp)
-add_dependencies(${PROJECT_NAME}_test
-  ${${PROJECT_NAME}_EXPORTED_TARGETS}
-  ${catkin_EXPORTED_TARGETS}
-)
-target_link_libraries(${PROJECT_NAME}_test
-  ${catkin_LIBRARIES}
-)
-
 #############
 ## Install ##
 #############
-
-## Install C++ executables
-install(TARGETS ${PROJECT_NAME}_test
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
 
 ## Install Python executable scripts
 catkin_install_python(PROGRAMS

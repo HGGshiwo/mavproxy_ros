@@ -2,13 +2,13 @@
 # coding=utf-8
 import math
 import random
+import time
 import unittest
 
 import rospy
 import rostest
-from std_msgs.msg import String
 
-from mavproxy_ros.test.test_helper import TestHelper, sitl_env
+from mavproxy_ros.test.test_helper import Robot, http_post, sitl_env
 from mavproxy_ros.test.utils import gps_distance
 
 MODEL_NAME = "iris_demo"
@@ -31,7 +31,7 @@ class TestPlanner(unittest.TestCase):
     def setUp(self):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
-        self.helper = TestHelper()
+        self.robot = Robot()
 
     def tearDown(self):
         pass
@@ -41,28 +41,26 @@ class TestPlanner(unittest.TestCase):
         1. 飞机起飞，悬停状态，飞一段航点，
         2. 打开避障，再飞一段航点，返航
         """
-        pub = rospy.Publisher("/mavproxy/restart", String)
 
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
-        self.helper.set_state(MODEL_NAME, x=IRIS_X, y=IRIS_Y, z=0.2)
+        time.sleep(1)
+        self.robot.set_state(x=IRIS_X, y=IRIS_Y, z=1.0)
         with sitl_env():
-            pub.publish("restart")
-            self.helper.init()
-            self.helper.takeoff()
-            self.helper.http_post("/stop_pland")
-            self.helper.http_post("/stop_planner")
+            self.robot.init()
+            self.robot.takeoff()
+            http_post("/stop_pland")
+            http_post("/stop_planner")
 
-            res = self.helper.http_post("/set_waypoint", dict(waypoint=test_waypoint))
-            assert res["status"] == "success", res
-            home_lat = self.helper.state["lat"]
-            home_lon = self.helper.state["lon"]
+            http_post("/set_waypoint", dict(waypoint=test_waypoint), check=True)
+            home_lat = self.robot.state["lat"]
+            home_lon = self.robot.state["lon"]
             for i, wp in enumerate(test_waypoint[1:]):
                 if i == 3:
-                    res = self.helper.http_post("/start_planner")
+                    res = http_post("/start_planner")
                     assert res.get("status", None) == "success", res
                 for _ in range(10):
-                    res = self.helper.ws_event_queue.get(timeout=500)
+                    res = self.robot.ws_event_queue.get(timeout=500)
                     if res.get("event", None) == "progress":
                         break
                 else:
@@ -70,18 +68,18 @@ class TestPlanner(unittest.TestCase):
 
                 assert res.get("total", None) == len(test_waypoint) - 1, res
                 assert res.get("cur", None) == i + 1, f"{res}, {i}"
-                lat = self.helper.state["lat"]
-                lon = self.helper.state["lon"]
+                lat = self.robot.state["lat"]
+                lon = self.robot.state["lon"]
                 dist = gps_distance(lon, lat, wp[0], wp[1])
-                dist_z = math.fabs(self.helper.state["rel_alt"] - wp[2])
+                dist_z = math.fabs(self.robot.state["rel_alt"] - wp[2])
                 assert dist < XY_THRESHOLD, f"dist: {dist}, wp:[{wp[0]}, {wp[1]}]"
                 assert dist_z < Z_THRESHOLD, f"z: {dist_z}"
 
-            self.helper.wait_for_state("state", "悬停状态", 120)
-            self.helper.http_post("/return")
-            self.helper.wait_for_state("state", "地面状态", 120)
+            self.robot.wait_for_state("state", "悬停状态", 120)
+            http_post("/return", check=True)
+            self.robot.wait_for_state("state", "地面状态", 120)
             dist_to_home = gps_distance(
-                home_lon, home_lat, self.helper.state["lon"], self.helper.state["lat"]
+                home_lon, home_lat, self.robot.state["lon"], self.robot.state["lat"]
             )
             assert dist_to_home < 2, dist_to_home
 

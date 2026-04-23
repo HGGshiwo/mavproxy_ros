@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # coding=utf-8
-import math
 import random
 import time
 import unittest
@@ -8,11 +7,8 @@ import unittest
 import numpy as np
 import rospy
 import rostest
-from rsos_msgs.msg import PointObj
-from std_msgs.msg import String
 
-from mavproxy_ros.test.test_helper import TestHelper, sitl_env
-from mavproxy_ros.test.utils import get_gps, gps_distance
+from mavproxy_ros.test.test_helper import Robot, http_get, http_post, sitl_env
 
 XY_THRESHOLD = 2.5  # 目标的距离阈值
 Z_THRESHOLD = 1.0  # 高度的距离阈值
@@ -49,30 +45,27 @@ class TestDog(unittest.TestCase):
     def setUp(self):
         # 初始化节点（对于rostest，必须用匿名节点）
         rospy.init_node("auto_test_director", anonymous=True)
-        self.helper = TestHelper()
+        self.robot = Robot()
 
     def tearDown(self):
         pass
 
     def test_set_motion_state(self):
-        pub = rospy.Publisher("/mavproxy/restart", String)
-
         IRIS_X = random.randint(-3, 3)
         IRIS_Y = random.randint(-3, 3)
-        self.helper.set_robot_state(x=IRIS_X, y=IRIS_Y, z=0.2)
+        time.sleep(1)
+        self.robot.set_state(x=IRIS_X, y=IRIS_Y, z=0.2)
 
-        with self.helper.sitl_env():
-            pub.publish("restart")
-            self.helper.init()
-            self.helper.http_post("/stop_pland")
-            self.helper.http_post("/stop_planner")
-            self.helper.takeoff()
+        with sitl_env():
+            self.robot.init()
+            http_post("/stop_pland", check=True)
+            http_post("/stop_planner", check=True)
+            self.robot.takeoff()
 
             for state in ["crawl", "walk", "run_low", "run_high"]:
                 rospy.logerr(f"尝试切换速度状态到: {state}")
-                res = self.helper.http_post("/set_motion_state", dict(state=state))
-                assert res.get("status", None) == "success", res
-                res = self.helper.http_get("/get_motion_state")
+                http_post("/set_motion_state", dict(state=state), check=True)
+                res = http_get("/get_motion_state")
                 assert res.get("msg", None) == state, res
 
 

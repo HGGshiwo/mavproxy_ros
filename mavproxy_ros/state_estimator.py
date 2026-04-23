@@ -30,6 +30,8 @@ class StateEstimator:
         self.enu_z = TimeoutValue(timeout)
         self.enu_yaw = TimeoutValue(timeout)
         self.ned_yaw = TimeoutValue(timeout)
+        self.pitch = TimeoutValue(timeout)
+        self.roll = TimeoutValue(timeout)
         self.lon = TimeoutValue(timeout)
         self.lat = TimeoutValue(timeout)
         self.lock = threading.RLock()
@@ -59,7 +61,7 @@ class StateEstimator:
                 self.lon = lon
 
             if quaternion is not None:
-                _, _, self.enu_yaw = euler_from_quaternion(quaternion)
+                self.roll, self.pitch, self.enu_yaw = euler_from_quaternion(quaternion)
                 self.ned_yaw = self.enu_yaw2ned_yaw(self.enu_yaw)
 
             for value in [self.enu_x, self.enu_y, self.enu_yaw, self.lat, self.lon]:

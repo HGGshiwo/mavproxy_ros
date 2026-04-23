@@ -8,12 +8,14 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from queue import Queue
-from typing import Any, Dict
+from typing import Any, Dict, final
 from urllib import response
 
 import psutil
 import requests
+import rospkg
 import rospy
 import tf
 import tf.transformations
@@ -21,7 +23,10 @@ import websockets
 from event_callback.components.ros import ROSComponent
 from event_callback.core import BaseManager
 from gazebo_msgs.msg import ModelState
-from gazebo_msgs.srv import GetModelState, SetModelState
+from gazebo_msgs.srv import GetModelState, SetModelState, SpawnModel
+from geometry_msgs.msg import Pose, Twist
+from std_msgs.msg import String
+from std_srvs.srv import Empty
 
 from mavproxy_ros.utils import wait_for_debugger
 
@@ -30,7 +35,10 @@ PORT = 8000
 
 
 @contextmanager
-def sitl_env(robot_type: str = "drone"):
+def sitl_env(robot_type: str = None):
+    if robot_type is None:
+        robot_type = rospy.get_param("~robot_type")
+
     # 1. 核心魔法：生成一个独一无二的 UUID 作为本次启动的“狗牌”
     # 例如：'sitl_test_8f2a1b...'
     session_id = f"sitl_test_{uuid.uuid4().hex[:8]}"
@@ -105,65 +113,148 @@ def sitl_env(robot_type: str = "drone"):
 MODEL_NAME_MAP = {"dog": "/", "drone": "iris_demo"}
 
 
-class TestHelper(BaseManager):
-    def __init__(self):
-        super().__init__(ROSComponent())
-        self.stop = threading.Event()
-        self.state = {}
-        self.lock = threading.Lock()
-        self.ws_open = threading.Event()
-        self.ws_event_queue = Queue()
-        threading.Thread(
-            target=asyncio.run, args=(self.connect_websocket(),), daemon=True
-        ).start()
+def http_post(url, data=None, check=False) -> Dict[str, Any]:
+    response = requests.post(f"http://{HOST}:{PORT}{url}", json=data)
+    res = response.json()
+    if check:
+        assert res.get("status", "success"), res
+    return res
+
+
+def http_get(url):
+    response = requests.get(f"http://{HOST}:{PORT}{url}")
+    return response.json()
+
+
+class GazeboObject:
+    @staticmethod
+    def get_robot_type():
+        robot_type = rospy.get_param("~robot_type")
+        return MODEL_NAME_MAP.get(robot_type)
+
+    def __init__(self, robot_name=None):
         rospy.wait_for_service("/gazebo/get_model_state", timeout=5.0)
-        self.get_model_state = rospy.ServiceProxy(
+        self.get_state_service = rospy.ServiceProxy(
             "/gazebo/get_model_state", GetModelState
         )
         rospy.wait_for_service("/gazebo/set_model_state", timeout=5.0)
         self.set_state_service = rospy.ServiceProxy(
             "/gazebo/set_model_state", SetModelState
         )
-        self.robot_type = rospy.get_param("~robot_type")
+        rospy.wait_for_service("/gazebo/pause_physics")
+        self.pause_physics = rospy.ServiceProxy("/gazebo/pause_physics", Empty)
+        rospy.wait_for_service("/gazebo/unpause_physics")
+        self.unpause_physics = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
+        if robot_name is None:
+            robot_name = self.get_robot_type()
+        self.robot_name = robot_name
+        self.pub = rospy.Publisher(f"/{robot_name}/cmd_vel", Twist, queue_size=1)
+        self.is_moving = threading.Event()
+        self.before_cb = None
+        self.step_cb = None
 
-    async def connect_websocket(self):
-        # 替换为你需要连接的WebSocket地址
-        uri = f"ws://{HOST}:{PORT}/ws"
-        msg = None
-        while not self.stop.is_set():
-            try:
-                # 建立连接
-                async with websockets.connect(uri) as websocket:
-                    rospy.loginfo("成功连接到服务器！")
-                    self.ws_open.set()
-                    while True:
-                        msg = await websocket.recv()
-                        data = json.loads(msg)
-                        if data["type"] == "state":
-                            with self.lock:
-                                self.state.update(data)
-                        elif data["type"] == "event":
-                            self.ws_event_queue.put(data)
+    def before(self):
+        def wrapper(func):
+            self.before_cb = func
+            return func
 
-            except websockets.exceptions.ConnectionClosed as e:
-                rospy.logerr(f"连接已关闭: {e}")
-            except Exception as e:
-                rospy.logerr(f"发生错误: {e}")
-                rospy.logerr(msg)
-            time.sleep(1)
-            self.ws_open.clear()
+        return wrapper
 
-    def http_post(self, url, data=None) -> Dict[str, Any]:
-        response = requests.post(f"http://{HOST}:{PORT}{url}", json=data)
-        return response.json()
+    def step(self):
+        def wrapper(func):
+            self.step_cb = func
+            return func
 
-    def http_get(self, url):
-        response = requests.get(f"http://{HOST}:{PORT}{url}")
-        return response.json()
+        return wrapper
 
-    def get_state(self, model_name: str):
+    def move_worker(self):
+        rate = rospy.Rate(50)
+        while self.is_moving.is_set():
+            cmd = Twist()
+            vx, vy, omega = self.step_cb()
+            cmd.linear.x = vx  # 前进速度（body frame 的 x 方向）
+            cmd.linear.y = vy
+            cmd.angular.z = omega  # 旋转角速度
+            self.pub.publish(cmd)
+            rate.sleep()
+
+    @contextmanager
+    def moving(self, writer):
+        self.is_moving.set()
+        try:
+            self.before_cb(writer)
+        except Exception as e:
+            rospy.logerr(f"before_cb: {e}")
+        t = threading.Thread(target=self.move_worker, daemon=True)
+        t.start()
+        try:
+            yield
+        except Exception as e:
+            rospy.logerr(e)
+            raise e
+        finally:
+            self.is_moving.clear()
+            t.join()
+
+    def set_state(
+        self,
+        x: float = 0,
+        y: float = 0,
+        z: float = 0,
+        roll: float = 0,
+        pitch: float = 0,
+        yaw: float = 0,
+        vx: float = 0,
+        vy: float = 0,
+        vw: float = 0,
+    ):
+        # ================= 步骤 2：重置位置到原点 (物理层面) =================
+        model_name = self.robot_name
+        time.sleep(1)  # 非常关键，不sleep可能导致解体！
+        self.pause_physics()
+        time.sleep(1)  # 非常关键，不sleep可能导致解体！
+        try:
+            # 构造期望的状态
+            state_msg = ModelState()
+            state_msg.model_name = (
+                model_name  # 你的无人机在Gazebo里的名字，通常是 iris, px4 等
+            )
+            state_msg.reference_frame = "world"
+
+            # 2.1 重置位姿到原点
+            state_msg.pose.position.x = x
+            state_msg.pose.position.y = y
+            state_msg.pose.position.z = z  # 或者地面的高度，如 0.1
+
+            orientation = tf.transformations.quaternion_from_euler(roll, pitch, yaw)
+
+            state_msg.pose.orientation.x = orientation[0]
+            state_msg.pose.orientation.y = orientation[1]
+            state_msg.pose.orientation.z = orientation[2]
+            state_msg.pose.orientation.w = orientation[3]
+
+            # 2.2 【关键】清空所有的线速度和角速度残余！
+            state_msg.twist.linear.x = vx
+            state_msg.twist.linear.y = vy
+            state_msg.twist.linear.z = 0.0
+            state_msg.twist.angular.x = 0.0
+            state_msg.twist.angular.y = 0.0
+            state_msg.twist.angular.z = vw
+
+            # 发送瞬移请求
+            resp = self.set_state_service(state_msg)
+            if not resp.success:
+                raise RuntimeError(f"{model_name} 设置位置失败！")
+        except rospy.ServiceException as e:
+            raise RuntimeError("SetModelState 服务调用失败: %s" % e)
+        finally:
+            self.unpause_physics()
+        return True
+
+    def get_state(self):
         """获取模型状态，返回: (x, y, z), (vel_x, vel_y, vel_z), (roll, pitch, yaw)"""
-        response = self.get_model_state(model_name, "world")
+        model_name = self.robot_name
+        response = self.get_state_service(model_name, "world")
 
         if not response.success:
             rospy.logerr("获取模型状态失败！可能是模型名称写错了。")
@@ -187,72 +278,80 @@ class TestHelper(BaseManager):
         (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(orientation_list)
         return (pos_x, pos_y, pos_z), (vel_x, vel_y, vel_z), (roll, pitch, yaw)
 
-    def set_robot_state(
-        self,
-        x: float = 0,
-        y: float = 0,
-        z: float = 0,
-        roll: float = 0,
-        pitch: float = 0,
-        yaw: float = 0,
-    ):
-        self.set_state(MODEL_NAME_MAP.get(self.robot_type), x, y, z, roll, pitch, yaw)
 
-    def sitl_env(self):
-        return sitl_env(self.robot_type)
-
-    def set_state(
-        self,
-        model_name="iris",
-        x: float = 0,
-        y: float = 0,
-        z: float = 0,
-        roll: float = 0,
-        pitch: float = 0,
-        yaw: float = 0,
-    ):
-        # 等待一小会儿让飞控状态机稳定
-        rospy.sleep(1.0)
-        # ================= 步骤 2：重置位置到原点 (物理层面) =================
-        rospy.wait_for_service("/gazebo/set_model_state", timeout=5.0)
+class Apriltag(GazeboObject):
+    def spawn(self, name="apriltag"):
+        """在测试中途，突然生成 AprilTag"""
+        rospy.wait_for_service("/gazebo/spawn_sdf_model")
+        rospack = rospkg.RosPack()
         try:
-            # 构造期望的状态
-            state_msg = ModelState()
-            state_msg.model_name = (
-                model_name  # 你的无人机在Gazebo里的名字，通常是 iris, px4 等
-            )
-            state_msg.reference_frame = "world"
+            spawn_sdf = rospy.ServiceProxy("/gazebo/spawn_sdf_model", SpawnModel)
+            pkg_path = rospack.get_path("gazebo_sim")
+            # 读取你的 SDF 文件
+            with open(f"{pkg_path}/models/apriltag/model-1_4.sdf", "r") as f:
+                model_xml = f.read()
 
-            # 2.1 重置位姿到原点
-            state_msg.pose.position.x = x
-            state_msg.pose.position.y = y
-            state_msg.pose.position.z = z  # 或者地面的高度，如 0.1
-
-            orientation = tf.transformations.quaternion_from_euler(roll, pitch, yaw)
-
-            state_msg.pose.orientation.x = orientation[0]
-            state_msg.pose.orientation.y = orientation[1]
-            state_msg.pose.orientation.z = orientation[2]
-            state_msg.pose.orientation.w = orientation[3]
-
-            # 2.2 【关键】清空所有的线速度和角速度残余！
-            state_msg.twist.linear.x = 0.0
-            state_msg.twist.linear.y = 0.0
-            state_msg.twist.linear.z = 0.0
-            state_msg.twist.angular.x = 0.0
-            state_msg.twist.angular.y = 0.0
-            state_msg.twist.angular.z = 0.0
-
-            # 发送瞬移请求
-            resp = self.set_state_service(state_msg)
-            if resp.success:
-                rospy.loginfo("无人机物理位置重置成功。")
-            else:
-                rospy.logerr("位置重置失败!")
+            # 设置位姿
+            initial_pose = Pose()
+            initial_pose.position.x = -100.0
+            initial_pose.position.y = -100.0
+            initial_pose.position.z = 0.001
+            orientation = tf.transformations.quaternion_from_euler(0, 0, 0)
+            # 旋转可以用 tf.transformations.quaternion_from_euler(1.57, 1.57, 0) 来算四元数
+            initial_pose.orientation.x = orientation[0]
+            initial_pose.orientation.y = orientation[1]
+            initial_pose.orientation.z = orientation[2]
+            initial_pose.orientation.w = orientation[3]
+            # 调用服务生成
+            spawn_sdf(name, model_xml, "/", initial_pose, "world")
+            print("AprilTag spawned successfully!")
 
         except rospy.ServiceException as e:
-            rospy.logerr("SetModelState 服务调用失败: %s" % e)
-        rospy.sleep(1.0)  # 再次缓冲
+            print(f"Spawn service failed: {e}")
+
+
+class Robot(GazeboObject, BaseManager):
+    def __init__(self):
+        BaseManager.__init__(self, ROSComponent())
+        GazeboObject.__init__(self, self.get_robot_type())
+        self.stop = threading.Event()
+        self.state = {}
+        self.lock = threading.Lock()
+        self.ws_open = threading.Event()
+        self.ws_event_queue = Queue()
+        self.restart_pub = rospy.Publisher("/mavproxy/restart", String, queue_size=1)
+
+        threading.Thread(
+            target=asyncio.run, args=(self.connect_websocket(),), daemon=True
+        ).start()
+
+    async def connect_websocket(self):
+        # 替换为你需要连接的WebSocket地址
+        uri = f"ws://{HOST}:{PORT}/ws"
+        msg = None
+        while not self.stop.is_set():
+            try:
+                # 建立连接
+                async with websockets.connect(uri) as websocket:
+                    rospy.loginfo("成功连接到服务器！")
+                    self.ws_open.set()
+                    while True:
+                        msg = await websocket.recv()
+                        data = json.loads(msg)
+                        if data.get("type", None) == "state":
+                            with self.lock:
+                                self.state.update(data)
+                        elif data.get("type", None) == "event":
+                            rospy.logerr(f"put into queue: {data}")
+                            self.ws_event_queue.put(data)
+
+            except websockets.exceptions.ConnectionClosed as e:
+                rospy.logerr(f"连接已关闭: {e}")
+            except Exception as e:
+                rospy.logerr(f"发生错误: {e}")
+                rospy.logerr(msg)
+            time.sleep(1)
+            self.ws_open.clear()
 
     def wait_for_state(self, name: str, value: Any, timeout=10):
         cur_value = None
@@ -265,15 +364,17 @@ class TestHelper(BaseManager):
             time.sleep(0.1)
         else:
             raise RuntimeError(f"Wait for {name} == {value} timeout!(cur: {cur_value})")
+        rospy.logerr("等待完成！")
 
     def init(self):
         """初始化状态"""
+        self.restart_pub.publish("restart")
         # wait_for_debugger()
         self.ws_open.wait(timeout=20)
         rospy.loginfo("disarm vehicle!")
         for i in range(1000):
             time.sleep(2)  # 等待control注册成功
-            res = self.http_post("/disarm")
+            res = http_post("/disarm")
             if res.get("status", None) == "success":
                 break
         else:
@@ -284,27 +385,27 @@ class TestHelper(BaseManager):
         rospy.loginfo("wait for 地面状态")
         self.wait_for_state("state", "地面状态", 1000)
 
-    def takeoff(self, waypoint=None):
+    def takeoff(self, waypoint=None, alt=5):
         rospy.loginfo("起飞状态检查")
         for j in range(10):
             for i in range(100):
                 time.sleep(3)
-                res = self.http_get("/prearms")
+                res = http_get("/prearms")
                 if "msg" not in res:
                     raise RuntimeError(res)
                 msg = res["msg"]
 
-                rospy.logerr(f"123, {res}")
+                # rospy.loginfo(f"123, {res}")
                 if msg.get("arm") == False:
                     rospy.logerr(f"Error: {msg['reason']}")
                     continue
 
                 rospy.loginfo(f"起飞检查通过，尝试第{j+1}/10次起飞")
                 if waypoint is None:
-                    out = self.http_post("/takeoff", data=dict(alt=5))
+                    out = http_post("/takeoff", data=dict(alt=alt))
                     target_state = "悬停状态"
                 else:
-                    out = self.http_post("/set_waypoint", data=dict(waypoint=waypoint))
+                    out = http_post("/set_waypoint", data=dict(waypoint=waypoint))
                     target_state = "航点模式"
                 if out["status"] == "success":
                     rospy.loginfo("起飞成功！")
@@ -317,11 +418,12 @@ class TestHelper(BaseManager):
 
         raise RuntimeError("Prearm timeout!")
 
-    def print_report(self, data: Dict[str, Any]):
-        # 打印完美的性能报告
-        rospy.loginfo("============ 测试通过 ==============")
-        for k, v in data.items():
-            if isinstance(v, float):
-                v = round(v, 2)
-            rospy.loginfo(f"{k}: {v}")
-        rospy.loginfo("====================================")
+
+def print_report(data: Dict[str, Any]):
+    # 打印完美的性能报告
+    rospy.loginfo("============ 测试通过 ==============")
+    for k, v in data.items():
+        if isinstance(v, float):
+            v = round(v, 2)
+        rospy.loginfo(f"{k}: {v}")
+    rospy.loginfo("====================================")
